@@ -8,14 +8,14 @@ parser = argparse.ArgumentParser(description='Training a SNN on MNIST with Event
 
 # General settings
 parser.add_argument('--data-folder', type=str, default='data', help='name of folder to place dataset (default: data)')
-parser.add_argument('--device', type=str, default='cuda', help='device to run on (default: cuda)')
+parser.add_argument('--device', type=str, default='cpu', help='device to run on (default: c)')
 parser.add_argument('--seed', type=int, default=0, help='random seed (default: 0)')
 parser.add_argument('--print-freq', type=int, default=100, help='training stats are printed every so many batches (default: 100)')
 parser.add_argument('--deterministic', action='store_true', help='run in deterministic mode for reproducibility')
 
 # Training settings
 parser.add_argument('--epochs', type=int, default=40, help='number of epochs to train (default: 100)')
-parser.add_argument('--lr', type=float, default=1.0, help='learning rate (default: 1.0)')
+parser.add_argument('--lr', type=float, default=1, help='learning rate (default: 1.0)')
 parser.add_argument('--batch-size', type=int, default=128, help='size of batch used for each update step (default: 128)')
 
 # Loss settings (specific for SNNs)
@@ -108,6 +108,7 @@ test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_si
 model = SNN(784, 10, args.T, args.dt, args.tau_m, args.tau_s).to(args.device)
 criterion = SpikeCELoss(args.T, args.xi, args.tau_s)
 optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
+# optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
 for epoch in range(args.epochs):

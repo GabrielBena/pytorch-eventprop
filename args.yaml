@@ -1,0 +1,27 @@
+T: 30
+alpha: 0.01
+batch_size: 128
+beta: 2
+data_folder: ~/SpiNNCloud/Code/data/
+dataset: ying_yang
+deterministic: false
+device: cpu
+dt: 1
+encoding: latency_snntorch
+epochs: 20
+loss_type: ce_temporal
+lr: 0.001
+model: eventprop
+mu:
+  - 1
+  - 1.0
+n_hid: 20
+optimizer: adam
+print_freq: 100
+resolve_silent: true
+seed: 0
+t_max:
+t_min: 2.0
+tau_m: 20.0
+tau_s: 5.0
+xi: 0.4

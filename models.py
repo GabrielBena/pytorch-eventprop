@@ -4,6 +4,9 @@ import torch.nn.init as init
 import torch.nn.functional as F
 from torch.autograd import Function
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 class WrapperFunction(Function):
     @staticmethod
     def forward(ctx, input, params, forward, backward):
@@ -22,7 +25,7 @@ class WrapperFunction(Function):
 class FirstSpikeTime(Function):
     @staticmethod
     def forward(ctx, input):   
-        idx = torch.arange(input.shape[2], 0, -1).unsqueeze(0).unsqueeze(0).float().cuda()
+        idx = torch.arange(input.shape[2], 0, -1).unsqueeze(0).unsqueeze(0).float().to(device)
         first_spike_times = torch.argmax(idx*input, dim=2).float()
         ctx.save_for_backward(input, first_spike_times.clone())
         first_spike_times[first_spike_times==0] = input.shape[2]-1
@@ -53,9 +56,9 @@ class SpikingLinear(nn.Module):
     def manual_forward(self, input):
         steps = int(self.T / self.dt)
     
-        V = torch.zeros(input.shape[0], self.output_dim, steps).cuda()
-        I = torch.zeros(input.shape[0], self.output_dim, steps).cuda()
-        output = torch.zeros(input.shape[0], self.output_dim, steps).cuda()
+        V = torch.zeros(input.shape[0], self.output_dim, steps).to(device)
+        I = torch.zeros(input.shape[0], self.output_dim, steps).to(device)
+        output = torch.zeros(input.shape[0], self.output_dim, steps).to(device)
 
         while True:
             for i in range(1, steps):
@@ -79,11 +82,11 @@ class SpikingLinear(nn.Module):
     def manual_backward(self, grad_output, input, I, post_spikes):
         steps = int(self.T / self.dt)
                 
-        lV = torch.zeros(input.shape[0], self.output_dim, steps).cuda()
-        lI = torch.zeros(input.shape[0], self.output_dim, steps).cuda()
+        lV = torch.zeros(input.shape[0], self.output_dim, steps).to(device)
+        lI = torch.zeros(input.shape[0], self.output_dim, steps).to(device)
         
-        grad_input = torch.zeros(input.shape[0], input.shape[1], steps).cuda()
-        grad_weight = torch.zeros(input.shape[0], *self.weight.shape).cuda()
+        grad_input = torch.zeros(input.shape[0], input.shape[1], steps).to(device)
+        grad_weight = torch.zeros(input.shape[0], *self.weight.shape).to(device)
         
         for i in range(steps-2, -1, -1):
             t = i * self.dt
