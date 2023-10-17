@@ -15,7 +15,7 @@ model: eventprop
 mu:
   - 1
   - 1.0
-n_hid: 20
+n_hid: 200
 optimizer: adam
 print_freq: 100
 resolve_silent: true
@@ -24,4 +24,5 @@ t_max:
 t_min: 2.0
 tau_m: 20.0
 tau_s: 5.0
+use_fluctualtion_init: true
 xi: 0.4

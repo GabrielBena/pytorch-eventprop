@@ -32,7 +32,7 @@ def encode_data(data, args):
             spike_data = torch.cat([spike_data, t0_spike.unsqueeze(-1)], dim=-1)
 
     else:
-        spike_data = rate(data, args.T, gain=0.3)
+        spike_data = rate(data, args.T, gain=0.7)
         if len(spike_data.shape) > 2:
             spike_data = spike_data.flatten(start_dim=2)
     return spike_data

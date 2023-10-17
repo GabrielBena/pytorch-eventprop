@@ -175,7 +175,6 @@ class SpikingLinear2(nn.Module):
         nn.init.kaiming_normal_(self.weight)
         self.weight.data *= self.mu
 
-
         self.syn = snn.Synaptic(
             alpha=1 - kwargs["dt"] / kwargs["tau_s"],
             beta=1 - kwargs["dt"] / kwargs["tau_m"],
