@@ -11,10 +11,11 @@ from snntorch.functional import SpikeTime
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def reset(net) : 
-    for m in net.modules() : 
-        if hasattr(m, 'reset_hidden') : 
+def reset(net):
+    for m in net.modules():
+        if hasattr(m, "reset_hidden"):
             m.reset_hidden()
+
 
 def init_weights(w, weight_scale=1.0):
     k = weight_scale * (1.0 / np.sqrt(w.shape[1]))
@@ -40,7 +41,7 @@ class WrapperFunction(Function):
 
 class FirstSpikeTime(Function):
     @staticmethod
-    def forward(ctx, input, t=None):
+    def forward(ctx, input):
         idx = (
             torch.arange(input.shape[0], 0, -1)
             .unsqueeze(-1)
@@ -56,9 +57,9 @@ class FirstSpikeTime(Function):
     @staticmethod
     def backward(ctx, grad_output):
         input, first_spike_times = ctx.saved_tensors
-        k = F.one_hot(first_spike_times.long(), input.shape[0]).float().permute(2, 0, 1)
+        k = F.one_hot(first_spike_times.long(), input.shape[0]).float().permute(2, 0, 1) # T x B x N
         grad_input = k * grad_output.unsqueeze(0)
-        return grad_input, None
+        return grad_input
 
 
 class RecordingSequential(nn.Sequential):
@@ -87,7 +88,10 @@ class SpikingLinear(nn.Module):
         self.tau_s = tau_s
         self.resolve_silent = resolve_silent
         self.mu = mu if mu is not None else 1
-        self.mu_silent = 1/np.sqrt(d1)
+        self.mu_silent = 1 / np.sqrt(d1)
+
+        self.alpha = np.exp(-self.dt / self.tau_s)
+        self.beta = np.exp(-self.dt / self.tau_m)
 
         self.weight = nn.Parameter(torch.Tensor(d2, d1))
         nn.init.kaiming_normal_(self.weight)
@@ -112,13 +116,11 @@ class SpikingLinear(nn.Module):
             for i in range(1, steps):
                 t = i * self.dt
 
-                V[i] = (1 - self.dt / self.tau_m) * V[i - 1] + (
-                    self.dt / self.tau_m
-                ) * I[i - 1]
+                V[i] = self.beta * V[i - 1] + (1 - self.beta) * I[i - 1]
 
                 # V[i] = (1 - self.dt / self.tau_m) * V[i - 1] + I[i - 1]
 
-                I[i] = (1 - self.dt / self.tau_s) * I[i - 1] + F.linear(
+                I[i] = self.alpha * I[i - 1] + F.linear(
                     input[i - 1].float(), self.weight
                 )
 
@@ -131,8 +133,8 @@ class SpikingLinear(nn.Module):
                 self.weight.data[is_silent] += self.mu_silent
                 if is_silent.sum() == 0:
                     break
-            else : 
-                break                    
+            else:
+                break
 
         return (input, I, output), output
 
@@ -146,19 +148,21 @@ class SpikingLinear(nn.Module):
         grad_weight = torch.zeros(input.shape[1], *self.weight.shape).to(device)
 
         for i in range(steps - 2, -1, -1):
-            t = i * self.dt
-
             delta = lV[i + 1] - lI[i + 1]
             grad_input[i] = F.linear(delta, self.weight.t())
 
-            lV[i] = (1 - self.dt / self.tau_m) * lV[i + 1] + post_spikes[i + 1] * (
-                lV[i + 1] + grad_output[i + 1]
-            ) / (I[i] - 1 + 1e-10)
+            # Euler
+            lI[i] = self.alpha * lI[i + 1] + (1 - self.alpha) * lV[i + 1]
+            lV[i] = self.beta * lV[i + 1]
 
-            lI[i] = lI[i + 1] + (self.dt / self.tau_s) * delta
+            # Jump
+            lV[i] += post_spikes[i + 1] * (
+                (lV[i + 1] + grad_output[i + 1]) / (I[i] - 1 + 1e-10)
+            )
 
+            # Accumulate grad
             spike_bool = input[i].float()
-            grad_weight -= spike_bool.unsqueeze(1) * lI[i].unsqueeze(2)
+            grad_weight -= self.tau_s * spike_bool.unsqueeze(1) * lI[i].unsqueeze(2)
 
         return grad_input, grad_weight
 
@@ -167,9 +171,9 @@ class SpikingLinear2(nn.Module):
     def __init__(self, d1, d2, **kwargs) -> None:
         super().__init__()
         self.input_dim, self.output_dim = d1, d2
-        self.mu = kwargs.get("mu", 1.)
-        self.mu_silent = 1/np.sqrt(d1)
-        self.resolve_silent = kwargs.get('resolve_silent', False)
+        self.mu = kwargs.get("mu", 1.0)
+        self.mu_silent = 1 / np.sqrt(d1)
+        self.resolve_silent = kwargs.get("resolve_silent", False)
 
         self.weight = nn.Parameter(torch.Tensor(d2, d1))
         nn.init.kaiming_normal_(self.weight)
@@ -186,10 +190,9 @@ class SpikingLinear2(nn.Module):
         self.fix_silent = True
 
     def forward(self, input):
-        while True : 
+        while True:
             out_spikes = []
             for t, in_spikes in enumerate(input):
-                    
                 out = F.linear(in_spikes, self.weight)
                 spikes = self.syn(out)
                 out_spikes.append(spikes)
@@ -200,11 +203,11 @@ class SpikingLinear2(nn.Module):
                 self.weight.data[is_silent] += self.mu_silent
                 if is_silent.sum() == 0:
                     break
-            else : 
+            else:
                 break
 
         return out_spikes
-    
+
     def __repr__(self):
         return f"Spiking Linear ({self.input_dim}, {self.output_dim})"
 
@@ -235,7 +238,7 @@ class SNN2(nn.Module):
     def __init__(self, dims, **all_kwargs):
         super(SNN2, self).__init__()
 
-        self.resolve_silent = all_kwargs.get('resolve_silent', True)
+        self.resolve_silent = all_kwargs.get("resolve_silent", True)
         layers = []
         for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
             layer_kwargs = {
@@ -274,6 +277,7 @@ class SpikeCELoss(nn.Module):
     def __init__(self, xi, tau_s):
         super(SpikeCELoss, self).__init__()
         self.spike_time_fn = FirstSpikeTime.apply
+        # self.spike_time_fn = SpikeTime().first_spike_fn
         self.xi = xi
         self.tau_s = tau_s
         self.celoss = nn.CrossEntropyLoss()
