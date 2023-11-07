@@ -15,7 +15,7 @@ import snntorch as snn
 import os
 
 import torch.nn as nn
-from new_models import SpikingLinear, SpikingLinear2
+from new_models import SpikingLinear, SpikingLinear_snntorch
 import math
 import torch.distributions as dists
 
@@ -88,8 +88,8 @@ class Initializer:
         self.bias_mean = bias_mean
 
     def initialize(self, model):
-        for target in model.layers : 
-            if isinstance(target, (SpikingLinear, SpikingLinear2, nn.Linear)):
+        for target in model.layers:
+            if isinstance(target, (SpikingLinear, SpikingLinear_snntorch, nn.Linear)):
                 self.initialize_connection(target)
 
             elif isinstance(target, snn.SpikingNeuron):
@@ -154,11 +154,11 @@ class Initializer:
         self._set_weights(connection, weights)
 
         # set biases if used
-        if hasattr(connection, 'bias') : 
+        if hasattr(connection, "bias"):
             self._set_biases(connection)
 
         # apply constraints
-        if hasattr(connection, 'apply_constraints') :
+        if hasattr(connection, "apply_constraints"):
             connection.apply_constraints()
 
     def _set_weights(self, connection, weights):
@@ -241,20 +241,20 @@ class FluctuationDrivenNormalInitializer(Initializer):
         neuron group `dst`
         """
         if not hasattr(neuron_model, "tau_m"):
-            assert hasattr(neuron_model, 'beta')
+            assert hasattr(neuron_model, "beta")
             tau_m = 1 / (1 - neuron_model.beta)
-        
-            assert hasattr(neuron_model, 'alpha')
+
+            assert hasattr(neuron_model, "alpha")
             tau_s = 1 / (1 - neuron_model.alpha)
-        
-        else  :
+
+        else:
             tau_m = neuron_model.tau_m
             tau_s = neuron_model.tau_s
 
         ebar, ehat = _get_epsilon(
             self.epsilon_calc_mode,
-            tau_m *1e-3,
-            tau_s *1e-3,
+            tau_m * 1e-3,
+            tau_s * 1e-3,
             self.timestep,
         )
 
@@ -277,9 +277,9 @@ class FluctuationDrivenNormalInitializer(Initializer):
 
         # Read out relevant attributes from connection object
         n, _ = torch.nn.init._calculate_fan_in_and_fan_out(connection.weight)
-        if hasattr(connection, 'syn') : 
+        if hasattr(connection, "syn"):
             ebar, ehat = self._calc_epsilon(connection.syn)
-        else :
+        else:
             ebar, ehat = self._calc_epsilon(connection)
 
         mu_w = self.mu_u / (n * self.nu * ebar)
@@ -396,9 +396,8 @@ class FluctuationDrivenCenteredNormalInitializer(FluctuationDrivenNormalInitiali
             **kwargs
         )
 
+
 if __name__ == "__main__":
-
-
     model_kwars = {
         "T": 20,
         "dt": 1,
@@ -410,8 +409,8 @@ if __name__ == "__main__":
 
     dims = [784, 100, 10]
     snntorch_model = SNN2(dims, **model_kwars)
-   
-    dt, T = model_kwars['dt'], model_kwars['T']
+
+    dt, T = model_kwars["dt"], model_kwars["T"]
     sigma_nu, nu = 1, 15
 
     initializer = FluctuationDrivenCenteredNormalInitializer(
@@ -419,5 +418,3 @@ if __name__ == "__main__":
     )
 
     initializer.initialize(snntorch_model)
-
-

@@ -1,0 +1,37 @@
+[project]
+
+name = "enventprop"
+
+version = "0.1.0"
+
+description = "Create a trains model with snntorch and exact gradients backpropagation."
+
+readme = "README.md"
+
+requires-python = ">=3.7"
+
+license = {file = "LICENSE"}
+
+keywords = ["snntorch", "eventprop", "pytorch"]
+
+authors = [
+{name = "Pedro Savarese", email =  "savarese@ttic.edu"},
+{name = "Gabriel Béna", email =  "gabriel.bena@prophesee.com"},
+]
+
+maintainers = [
+{name = "Gabriel Béna", email =  "gabriel.bena@prophesee.com"},
+]
+
+dependencies = [ 
+    "numpy",
+    "matplotlib"
+] 
+
+
+[build-system]
+requires = ["setuptools>=43.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["eventprop"]

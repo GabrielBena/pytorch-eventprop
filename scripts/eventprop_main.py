@@ -13,14 +13,18 @@ from yingyang.dataset import YinYangDataset
 
 from new_models import SNN, SNN2, FirstSpikeTime, SpikeCELoss
 from training import train, test, encode_data
-from initalization_scheme import FluctuationDrivenCenteredNormalInitializer, FluctuationDrivenNormalInitializer
+from initalization_scheme import (
+    FluctuationDrivenCenteredNormalInitializer,
+    FluctuationDrivenNormalInitializer,
+)
 import yaml, pyaml
 
 if __name__ == "__main__":
-    
     # %% Args
-    
-    parser = argparse.ArgumentParser(description="Training a SNN on MNIST with EventProp")
+
+    parser = argparse.ArgumentParser(
+        description="Training a SNN on MNIST with EventProp"
+    )
 
     # General settings
     parser.add_argument(
@@ -47,10 +51,10 @@ if __name__ == "__main__":
 
     # Training settings
     parser.add_argument(
-        "--epochs", type=int, default=20, help="number of epochs to train (default: 100)"
+        "--epochs", type=int, default=2, help="number of epochs to train (default: 100)"
     )
     parser.add_argument(
-        "--lr", type=float, default=1e-3, help="learning rate (default: 1.0)"
+        "--lr", type=float, default=1e-2, help="learning rate (default: 1.0)"
     )
     parser.add_argument(
         "--optimizer", type=str, default="adam", help="optimizer to use (default: adam)"
@@ -66,19 +70,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--xi",
         type=float,
-        default=0.4,
+        default=0.1,
         help="constant factor for cross-entropy loss (default: 0.4)",
     )
     parser.add_argument(
         "--alpha",
         type=float,
-        default=0.01,
+        default=3e-3,
         help="regularization factor for early-spiking (default: 0.01)",
     )
     parser.add_argument(
         "--beta",
         type=float,
-        default=2,
+        default=6.4 / 5,
         help="constant factor for regularization term (default: 2.0)",
     )
 
@@ -117,12 +121,12 @@ if __name__ == "__main__":
         help="min input spiking time, in ms (default: 2)",
     )
     # %% Main Args
-    
+
     # ------ Main Arguments to change ------#
     parser.add_argument(
         "--dataset",
         type=str,
-        default="ying_yang",
+        default="mnist",
         help="dataset to use (default: mnist)",
     )
     parser.add_argument(
@@ -146,14 +150,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n_hid",
         type=object,
-        default=200,
+        default=100,
         help="number of hidden neurons (default: None)",
     )
     parser.add_argument(
         "--mu",
         type=float,
         # default=np.array([1]) * 0.1,
-        default=[1, 1.],
+        default=[1, 1.0],
         help="factor to scale the weights (default: 0.1)",
     )
 
@@ -165,19 +169,25 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        '--resolve_silent',
-        action='store_false',
-        help='add weight to fix silent neurons (default: True)'
+        "--resolve_silent",
+        action="store_false",
+        help="add weight to fix silent neurons (default: True)",
     )
 
     parser.add_argument(
-        "--use_fluctualtion_init",
-        action="store_false",
+        "--use_fluct_init",
+        action="store_true",
         help="use fluctuation init (default: True)",
     )
 
+    parser.add_argument(
+        "--simple_lif",
+        action="store_true",
+        help="use simple LIF neuron (default: False)",
+    )
+
     args = parser.parse_args()
-    print(args.resolve_silent)
+    print(args)
 
     current_dir = os.path.dirname(os.path.realpath(__file__))
     with open(current_dir + "/args.yaml", "w") as f:
@@ -187,7 +197,7 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     random.seed(args.seed)
     # %% Data
-    
+
     if args.deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
@@ -197,7 +207,10 @@ if __name__ == "__main__":
             args.data_folder, train=True, download=True, transform=transforms.ToTensor()
         )
         test_dataset = datasets.MNIST(
-            args.data_folder, train=False, download=True, transform=transforms.ToTensor()
+            args.data_folder,
+            train=False,
+            download=True,
+            transform=transforms.ToTensor(),
         )
     elif args.dataset == "ying_yang":
         train_dataset = YinYangDataset(size=60000, seed=42)
@@ -210,7 +223,7 @@ if __name__ == "__main__":
         train_dataset, batch_size=args.batch_size, shuffle=True
     )
     test_loader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=args.batch_size, shuffle=False
+        test_dataset, batch_size=128, shuffle=False
     )
 
     # %% Model
@@ -221,16 +234,12 @@ if __name__ == "__main__":
         "tau_m": args.tau_m,
         "tau_s": args.tau_s,
         "mu": args.mu,
-        "resolve_silent" : args.resolve_silent 
+        "resolve_silent": args.resolve_silent,
+        "simple_lif": args.simple_lif,
     }
 
     n_ins = {"mnist": 784, "ying_yang": 5 if "latency" in args.encoding else 4}
     n_outs = {"mnist": 10, "ying_yang": 3}
-
-    # if args.encoding == "latency":
-    #     args.mu *= 10
-    # if args.dataset == "ying_yang":
-    #     args.mu *= 10
 
     dims = [n_ins[args.dataset]]
     if args.n_hid is not None and isinstance(args.n_hid, list):
@@ -244,16 +253,16 @@ if __name__ == "__main__":
         if args.model == "eventprop"
         else SNN2(dims, **model_kwars).to(args.device)
     )
-    # model = torch.compile(model)
-    # %% Loss and Optimizer 
+    # %% Loss and Optimizer
 
     # criterion = SpikeCELoss(args.T, args.xi, args.tau_s)
     if args.loss_type == "ce_temporal":
         if args.model == "snntorch":
             criterion = ce_temporal_loss()
         elif args.model == "eventprop":
+            criterion = ce_temporal_loss()
             # criterion.spk_time_fn.first_spike_fn = FirstSpikeTime.apply
-            criterion = SpikeCELoss(args.xi, args.tau_s)
+            # criterion = SpikeCELoss(args.xi, args.tau_s)
         else:
             raise ValueError("Invalid model name")
     elif args.loss_type == "ce_rate":
@@ -264,6 +273,7 @@ if __name__ == "__main__":
         raise ValueError("Invalid loss type")
 
     first_spike_fn = SpikeTime().first_spike_fn
+    # first_spike_fn = FirstSpikeTime.apply
 
     if args.optimizer == "adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -276,12 +286,14 @@ if __name__ == "__main__":
 
     # %% Init
 
-    if args.use_fluctualtion_init : 
+    if args.use_fluct_init:
         data, target = next(iter(train_loader))
         spikes = encode_data(data.to(args.device), args)
         nu = spikes.sum(0).mean() / (args.T * args.dt * 1e-3)
         initializer = FluctuationDrivenCenteredNormalInitializer(
-            sigma_u=1, nu=nu, timestep=args.dt*1e-3,
+            sigma_u=1,
+            nu=nu,
+            timestep=args.dt * 1e-3,
         )
         initializer.initialize(model)
 
@@ -289,12 +301,17 @@ if __name__ == "__main__":
 
     for epoch in range(args.epochs):
         print("Epoch {:03d}/{:03d}".format(epoch, args.epochs))
-        if epoch > 0 :  
+        if epoch > 0:
             train(
-                model, criterion, optimizer, train_loader, args, first_spike_fn=first_spike_fn
+                model,
+                criterion,
+                optimizer,
+                train_loader,
+                args,
+                first_spike_fn=first_spike_fn,
             )
             scheduler.step()
         test(model, test_loader, args, first_spike_fn=first_spike_fn)
-        
+
 
 # %%
