@@ -11,11 +11,10 @@ from snntorch.functional.loss import (
 )
 from yingyang.dataset import YinYangDataset
 
-from new_models import SNN, SNN2, FirstSpikeTime, SpikeCELoss
-from training import train, test, encode_data
-from initalization_scheme import (
+from eventprop.models import SNN
+from eventprop.training import train, test, encode_data
+from eventprop.initalization import (
     FluctuationDrivenCenteredNormalInitializer,
-    FluctuationDrivenNormalInitializer,
 )
 import yaml, pyaml
 
@@ -32,9 +31,6 @@ if __name__ == "__main__":
         type=str,
         default="~/SpiNNCloud/Code/data/",
         help="name of folder to place dataset (default: data)",
-    )
-    parser.add_argument(
-        "--device", type=str, default="cpu", help="device to run on (default: cuda)"
     )
     parser.add_argument("--seed", type=int, default=0, help="random seed (default: 0)")
     parser.add_argument(
@@ -177,7 +173,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use_fluct_init",
         action="store_true",
-        help="use fluctuation init (default: True)",
+        help="use fluctuation init (default: False)",
     )
 
     parser.add_argument(
@@ -235,7 +231,6 @@ if __name__ == "__main__":
         "tau_s": args.tau_s,
         "mu": args.mu,
         "resolve_silent": args.resolve_silent,
-        "simple_lif": args.simple_lif,
     }
 
     n_ins = {"mnist": 784, "ying_yang": 5 if "latency" in args.encoding else 4}
@@ -249,9 +244,9 @@ if __name__ == "__main__":
     dims.append(n_outs[args.dataset])
 
     model = (
-        SNN(dims, **model_kwars).to(args.device)
+        SNN(dims, **model_kwars).to(device)
         if args.model == "eventprop"
-        else SNN2(dims, **model_kwars).to(args.device)
+        else SNN2(dims, **model_kwars).to(device)
     )
     # %% Loss and Optimizer
 

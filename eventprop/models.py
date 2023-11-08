@@ -71,10 +71,10 @@ class SpikingLinear_ev(nn.Module):
             return output
 
         @staticmethod
-        def backward(ctx, grad_output):
+        def backward(ctx, *grad_output):
             backward = ctx.backward
             pack = ctx.saved_tensors
-            grad_input, grad_weights = backward(grad_output, *pack)
+            grad_input, grad_weights = backward(grad_output[0], *pack)
             return grad_input, grad_weights, None, None
 
     def __repr__(self):
@@ -121,7 +121,7 @@ class SpikingLinear_ev(nn.Module):
 
         for i in range(steps - 2, -1, -1):
             delta = lV[i + 1] - lI[i + 1]
-            grad_input[i] = -F.linear(delta, self.weight.t())
+            grad_input[i] = - F.linear(delta, self.weight.t())
 
             # Euler
             lI[i] = self.alpha * lI[i + 1] + (1 - self.alpha) * lV[i + 1]
@@ -186,21 +186,36 @@ class SpikingLinear_su(nn.Module):
 
 
 layer_types = {str(t): t for t in [SpikingLinear_ev, SpikingLinear_su]}
-
+model_types = {
+    m : t for m, t in zip(['eventprop', 'snntorch'], [SpikingLinear_ev, SpikingLinear_su])
+}
 
 class SNN(nn.Module):
-    def __init__(self, dims, layer_type, **all_kwargs):
+    def __init__(self, dims, **all_kwargs):
         super(SNN, self).__init__()
 
         self.get_first_spikes = all_kwargs.get("get_first_spikes", False)
-        self.eventprop = layer_type == str(SpikingLinear_ev)
+
+        layer_type = all_kwargs.get("layer_type", None)
+        model_type = all_kwargs.get("model_type", None)
+        assert not (layer_type is None and model_type is None), "Must specify layer_type or model_type"
+        
+        if model_type is not None:
+            assert model_type in model_types, f"Invalid model_type {model_type}"
+            layer = model_types[model_type]
+            self.eventprop = model_type == 'eventprop'
+        else : 
+            assert layer_type in layer_types, f"Invalid layer_type {layer_type}"
+            layer = layer_types[layer_type]
+            self.eventprop = layer_type == str(SpikingLinear_ev)
+        
         layers = []
         for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
             layer_kwargs = {
                 k: v[i] if isinstance(v, (list, np.ndarray)) else v
                 for k, v in all_kwargs.items()
             }
-            layers.append(layer_types[layer_type](d1, d2, **layer_kwargs))
+            layers.append(layer(d1, d2, **layer_kwargs))
 
         if self.get_first_spikes:
             self.outact = SpikeTime().first_spike_fn

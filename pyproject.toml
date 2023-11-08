@@ -26,8 +26,9 @@ maintainers = [
 dependencies = [ 
     "numpy",
     "matplotlib"
+    "snntorch";
+    "wandb",
 ] 
-
 
 [build-system]
 requires = ["setuptools>=43.0.0", "wheel"]

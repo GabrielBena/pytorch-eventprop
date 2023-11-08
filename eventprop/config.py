@@ -1,12 +1,10 @@
-from dataclasses import dataclass
 
 
-def make_dc(config, name="d_dataclass"):
-    @dataclass
-    class Wrapped:
-        __annotations__ = {k: type(v) for k, v in config.items()}
-
-    Wrapped.__qualname__ = Wrapped.__name__ = name
-    Wrapped.config = config
-
-    return Wrapped
+def get_flat_dict_from_nested(config):
+    flat_dict = {}
+    for key, value in config.items():
+        if isinstance(value, dict):
+            flat_dict.update(get_flat_dict_from_nested(value))
+        else:
+            flat_dict[key] = value
+    return flat_dict
