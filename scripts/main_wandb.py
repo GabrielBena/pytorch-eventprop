@@ -1,9 +1,9 @@
 import numpy as np
-import wandb 
+import wandb
 import random
 import torch
 import torch.nn.functional as F
-import argparse	
+import argparse
 from snntorch.functional.loss import (
     ce_temporal_loss,
     SpikeTime,
@@ -17,24 +17,28 @@ from eventprop.models import SNN, SpikeCELoss, FirstSpikeTime
 from eventprop.training import train_single_model
 from eventprop.config import get_flat_dict_from_nested
 
-def main(args, use_wandb=False) : 
 
+def main(args, use_wandb=False):
     if isinstance(args, argparse.Namespace):
         config = vars(args)
     elif isinstance(args, dict):
         config = args
     else:
-        raise ValueError("Invalid type for run configuration, must be dict or Namespace")
-    
-    config["device"] = config.get('device', torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        raise ValueError(
+            "Invalid type for run configuration, must be dict or Namespace"
+        )
 
-    if use_wandb: 
+    config["device"] = config.get(
+        "device", torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    )
+
+    if use_wandb:
         if wandb.run is None:
-            run = wandb.init(project='eventprop', entity='m2snn', config=config)
+            run = wandb.init(project="eventprop", entity="m2snn", config=config)
         else:
             run = wandb.run
         # Default values overwritten by potential sweep
-        config =  wandb.config
+        config = wandb.config
 
     # ------ Data ------
     torch.manual_seed(config["seed"])
@@ -74,7 +78,7 @@ def main(args, use_wandb=False) :
     )
 
     # ------ Model ------
-        
+
     n_ins = {"mnist": 784, "ying_yang": 5 if config["encoding"] == "latency" else 4}
     n_outs = {"mnist": 10, "ying_yang": 3}
 
@@ -85,7 +89,12 @@ def main(args, use_wandb=False) :
         dims.append(config["n_hid"])
     dims.append(n_outs[config["dataset"]])
 
-    model = SNN(dims, **config).to(config["device"])    
+    model = SNN(dims, **config).to(config["device"])
+    if config.get("train_last_only", False):
+        for n, layer in enumerate(model.layers):
+            if n < len(model.layers) - 1:
+                for p in layer.parameters():
+                    p.requires_grad = False
 
     # ------ Training ------
     optimizers_type = {"adam": torch.optim.Adam, "sgd": torch.optim.SGD}
@@ -93,36 +102,42 @@ def main(args, use_wandb=False) :
         model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"]
     )
     loaders = {"train": train_loader, "test": test_loader}
-        
-    if config['loss'] == "ce_temporal":
-        if config['model_type'] == 'snntorch' : 
+
+    if config["loss"] == "ce_temporal":
+        if config["model_type"] == "snntorch":
             criterion = ce_temporal_loss()
-        elif config['model_type'] == 'eventprop':
-            criterion = SpikeCELoss(config['xi'], config['tau_s'])
-        else :
+        elif config["model_type"] == "eventprop":
+            criterion = SpikeCELoss(config["xi"], config["tau_s"])
+        else:
             raise ValueError("Invalid model type")
-    elif config['loss'] == "ce_both":
-        criterion = [ce_temporal_loss(), SpikeCELoss(config['xi'], config['tau_s'])]
-    elif config['loss'] == "ce_rate":
+    elif config["loss"] == "ce_both":
+        criterion = [ce_temporal_loss(), SpikeCELoss(config["xi"], config["tau_s"])]
+    elif config["loss"] == "ce_rate":
         criterion = ce_rate_loss()
-    elif config['loss'] == "ce_count":
+    elif config["loss"] == "ce_count":
         criterion = ce_count_loss()
     else:
         raise ValueError("Invalid loss type")
-    
+
     # first_spike_fns = (SpikeTime().first_spike_fn, FirstSpikeTime.apply)
-    first_spike_fns = SpikeTime().first_spike_fn
+    first_spike_fns = SpikeTime.FirstSpike.apply
 
     args = argparse.Namespace(**config)
     train_results = train_single_model(
-        model, criterion, optimizer, loaders, args, first_spike_fn=first_spike_fns, use_wandb=use_wandb
+        model,
+        criterion,
+        optimizer,
+        loaders,
+        args,
+        first_spike_fn=first_spike_fns,
+        use_wandb=use_wandb,
     )
     if use_wandb:
         run.finish()
     return train_results
 
-if __name__ == '__main__' : 
 
+if __name__ == "__main__":
     use_wandb = False
 
     data_config = {
@@ -134,9 +149,9 @@ if __name__ == '__main__' :
         "T": 30,
         "dt": 1e-3,
         "t_min": 2,
-        "data_folder" : "../../data"
+        "data_folder": "data",
     }
-    
+
     model_config = {
         "T": data_config["T"],
         "dt": data_config["dt"],
@@ -144,16 +159,19 @@ if __name__ == '__main__' :
         "tau_s": 5e-3,
         "mu": 1,
         "resolve_silent": True,
-        "n_hid": 20,
-        "device": torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'),
-        "model_type" : 'eventprop',
+        "n_hid": 200,
+        "device": torch.device("cuda")
+        if torch.cuda.is_available()
+        else torch.device("cpu"),
+        "model_type": "eventprop",
+        # "train_last_only": True,
     }
 
     training_config = {
         "n_epochs": 2,
         "loss": "ce_temporal",
-        'alpha' : 0.,
-        'xi' : 1/model_config['tau_s'],
+        "alpha": 0.0,
+        "xi": 1 / model_config["tau_s"],
     }
 
     optim_config = {"lr": 1e-3, "weight_decay": 0, "optimizer": "adam"}
@@ -166,6 +184,3 @@ if __name__ == '__main__' :
     }
     flat_config = get_flat_dict_from_nested(config)
     train_results = main(flat_config, use_wandb=use_wandb)
-
-
-        

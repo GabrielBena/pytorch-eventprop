@@ -121,7 +121,7 @@ class SpikingLinear_ev(nn.Module):
 
         for i in range(steps - 2, -1, -1):
             delta = lV[i + 1] - lI[i + 1]
-            grad_input[i] = - F.linear(delta, self.weight.t())
+            grad_input[i] = -F.linear(delta, self.weight.t())
 
             # Euler
             lI[i] = self.alpha * lI[i + 1] + (1 - self.alpha) * lV[i + 1]
@@ -155,7 +155,7 @@ class SpikingLinear_su(nn.Module):
             alpha=np.exp(-kwargs["dt"] / kwargs["tau_s"]),
             beta=np.exp(-kwargs["dt"] / kwargs["tau_m"]),
             init_hidden=True,
-            reset_mechanism="zero_instant",
+            reset_mechanism="zero",
             threshold=1.0,
         )
 
@@ -187,8 +187,10 @@ class SpikingLinear_su(nn.Module):
 
 layer_types = {str(t): t for t in [SpikingLinear_ev, SpikingLinear_su]}
 model_types = {
-    m : t for m, t in zip(['eventprop', 'snntorch'], [SpikingLinear_ev, SpikingLinear_su])
+    m: t
+    for m, t in zip(["eventprop", "snntorch"], [SpikingLinear_ev, SpikingLinear_su])
 }
+
 
 class SNN(nn.Module):
     def __init__(self, dims, **all_kwargs):
@@ -198,17 +200,19 @@ class SNN(nn.Module):
 
         layer_type = all_kwargs.get("layer_type", None)
         model_type = all_kwargs.get("model_type", None)
-        assert not (layer_type is None and model_type is None), "Must specify layer_type or model_type"
-        
+        assert not (
+            layer_type is None and model_type is None
+        ), "Must specify layer_type or model_type"
+
         if model_type is not None:
             assert model_type in model_types, f"Invalid model_type {model_type}"
             layer = model_types[model_type]
-            self.eventprop = model_type == 'eventprop'
-        else : 
+            self.eventprop = model_type == "eventprop"
+        else:
             assert layer_type in layer_types, f"Invalid layer_type {layer_type}"
             layer = layer_types[layer_type]
             self.eventprop = layer_type == str(SpikingLinear_ev)
-        
+
         layers = []
         for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
             layer_kwargs = {

@@ -4,7 +4,7 @@ name = "enventprop"
 
 version = "0.1.0"
 
-description = "Create a trains model with snntorch and exact gradients backpropagation."
+description = "Create a trains model with snntorch (surrogate) and eventprop (exact) gradients backpropagation."
 
 readme = "README.md"
 
@@ -25,10 +25,11 @@ maintainers = [
 
 dependencies = [ 
     "numpy",
-    "matplotlib"
-    "snntorch";
-    "wandb",
-] 
+    "matplotlib",
+    "wandb", 
+    "snntorch",
+    "tqdm",
+]
 
 [build-system]
 requires = ["setuptools>=43.0.0", "wheel"]
