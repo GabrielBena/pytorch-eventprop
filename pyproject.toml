@@ -26,9 +26,11 @@ maintainers = [
 dependencies = [ 
     "numpy",
     "matplotlib",
+    "seaborn",
     "wandb", 
     "snntorch",
     "tqdm",
+    "ipykernel",
 ]
 
 [build-system]

@@ -2,7 +2,7 @@ from tqdm import tqdm
 from tqdm.notebook import tqdm as tqdm_notebook
 import numpy as np
 import argparse
-import wandb 
+import wandb
 import random
 
 import torch
@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 from snntorch.spikegen import rate, latency
 from eventprop.config import get_flat_dict_from_nested
+
 
 def is_notebook():
     """
@@ -44,9 +45,9 @@ def encode_data(data, args):
         else:
             if args.t_max is None:
                 args.t_max = int(args.T * 3 / 5)
-            spike_data = args.t_min + (args.t_max - args.t_min) * (
-                data < 0.5
-            ).view(data.shape[0], -1)
+            spike_data = args.t_min + (args.t_max - args.t_min) * (data < 0.5).view(
+                data.shape[0], -1
+            )
             spike_data = F.one_hot(spike_data.long(), int(args.T)).permute(2, 0, 1)
 
         if args.dataset == "ying_yang":
@@ -66,6 +67,7 @@ def train(model, criterion, optimizer, loader, args, first_spike_fn=None, pbar=N
     total_loss = 0.0
     total_samples = 0.0
     model.train()
+    n_last = max(256 // loader.batch_size, 1)
 
     if pbar is None:
         pbar_f = tqdm(loader, leave=None, position=0)
@@ -85,7 +87,7 @@ def train(model, criterion, optimizer, loader, args, first_spike_fn=None, pbar=N
             if isinstance(first_spike_fn, (list, tuple)):
                 all_first_spikes = tuple(fn(output) for fn in first_spike_fn)
                 first_spikes = all_first_spikes[0]
-            else : 
+            else:
                 first_spikes = first_spike_fn(output)
         else:
             first_spikes = output
@@ -104,9 +106,7 @@ def train(model, criterion, optimizer, loader, args, first_spike_fn=None, pbar=N
             target_first_spike_times = first_spikes.gather(1, target.view(-1, 1))
             loss += (
                 args.alpha
-                * (
-                    torch.exp(target_first_spike_times / (args.beta * args.tau_s)) - 1
-                ).mean()
+                * (torch.exp(target_first_spike_times / (args.beta)) - 1).mean()
             )
 
         predictions = first_spikes.data.min(-1, keepdim=True)[1]
@@ -127,9 +127,10 @@ def train(model, criterion, optimizer, loader, args, first_spike_fn=None, pbar=N
             batch_idx,
             len(loader),
             100
-            * np.array(total_correct)[-10:].sum()
-            / np.array(total_samples)[-10:].sum(),
-            np.array(total_loss)[-10:].sum() / np.array(total_samples)[-10:].sum(),
+            * np.array(total_correct)[-n_last:].sum()
+            / np.array(total_samples)[-n_last:].sum(),
+            np.array(total_loss)[-n_last:].sum()
+            / np.array(total_samples)[-n_last:].sum(),
             np.round(np.array([s[0].data.cpu().numpy().mean() for s in all_spikes]), 2),
         )
         descs = pbar.desc.split("|")
@@ -157,7 +158,7 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
                 if isinstance(first_spike_fn, (list, tuple)):
                     all_first_spikes = tuple(fn(output) for fn in first_spike_fn)
                     first_spikes = all_first_spikes[0]
-                else : 
+                else:
                     first_spikes = first_spike_fn(output)
             else:
                 first_spikes = output
@@ -189,7 +190,15 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
 
 
 def train_single_model(
-    model, criterion, optimizer, loaders, args, first_spike_fn=None, use_tqdm=True, use_wandb=False,
+    model,
+    criterion,
+    optimizer,
+    loaders,
+    args,
+    first_spike_fn=None,
+    use_tqdm=True,
+    use_wandb=False,
+    scheduler=None,
 ):
     n_epochs = getattr(args, "n_epochs", 2)
     pbar = range(n_epochs)
@@ -197,15 +206,16 @@ def train_single_model(
     train_losses, test_losses = [], []
     best_loss = 1e10
 
-    if use_wandb : 
+    if use_wandb:
         if wandb.run is None:
             need_finish = True
-            run = wandb.init(project='eventprop', entity='m2snn', config=args)
+            run = wandb.init(project="eventprop", entity="m2snn", config=args)
         else:
+            need_finish = False
             run = wandb.run
         # Default values overwritten by potential sweep
-        args =  argparse.Namespace(**get_flat_dict_from_nested(run.config))
-    elif isinstance(args, dict) : 
+        args = argparse.Namespace(**get_flat_dict_from_nested(run.config))
+    elif isinstance(args, dict):
         args = argparse.Namespace(**get_flat_dict_from_nested(args))
 
     if use_tqdm:
@@ -243,14 +253,18 @@ def train_single_model(
             best_loss = test_loss
             best_model = model.state_dict()
 
-        if use_wandb :
-            wandb.log({
-                "train_loss": train_loss,
-                "train_acc": train_acc,
-                "test_loss": test_loss,
-                "test_acc": test_acc,
-                "epoch": epoch,
-            })
+        if use_wandb:
+            wandb.log(
+                {
+                    "train_loss": train_loss,
+                    "train_acc": train_acc,
+                    "test_loss": test_loss,
+                    "test_acc": test_acc,
+                    "epoch": epoch,
+                }
+            )
+        if scheduler is not None and epoch > 0:
+            scheduler.step()
 
     result_dict = {
         "train_acc": train_accs,
@@ -263,5 +277,3 @@ def train_single_model(
         run.finish()
 
     return result_dict
-
-

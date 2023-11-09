@@ -101,6 +101,10 @@ def main(args, use_wandb=False):
     optimizer = optimizers_type[config["optimizer"]](
         model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"]
     )
+    if config.get("gamma", None) is not None:
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=1, gamma=config["gamma"]
+        )
     loaders = {"train": train_loader, "test": test_loader}
 
     if config["loss"] == "ce_temporal":
@@ -131,6 +135,7 @@ def main(args, use_wandb=False):
         args,
         first_spike_fn=first_spike_fns,
         use_wandb=use_wandb,
+        scheduler=scheduler,
     )
     if use_wandb:
         run.finish()
@@ -138,43 +143,62 @@ def main(args, use_wandb=False):
 
 
 if __name__ == "__main__":
-    use_wandb = False
+    use_wandb = True
 
     data_config = {
-        "seed": 42,
+        "seed": np.random.randint(1000),
         "dataset": "mnist",
-        "deterministic": True,
-        "batch_size": 128,
+        "deterministic": False,
+        "batch_size": 32,
         "encoding": "latency",
         "T": 30,
         "dt": 1e-3,
         "t_min": 2,
         "data_folder": "data",
+        "input_dropout": None,
+    }
+
+    paper_params = {
+        "mnist": {
+            "mu": [0.078, 0.2],
+            "sigma": [0.045, 0.37],
+        },
+        "ying_yang": {
+            "mu": [1.5, 0.78],
+            "sigma": [0.93, 0.1],
+        },
     }
 
     model_config = {
-        "T": data_config["T"],
-        "dt": data_config["dt"],
-        "tau_m": 20e-3,
-        "tau_s": 5e-3,
-        "mu": 1,
-        "resolve_silent": True,
-        "n_hid": 200,
+        "model_type": "eventprop",
+        "snn": {
+            "T": data_config["T"],
+            "dt": data_config["dt"],
+            "tau_m": 20e-3,
+            "tau_s": 5e-3,
+        },
+        "weights": {
+            "init_mode": "kaiming_both",
+            "scale": 3.0,
+            "mu": paper_params[data_config["dataset"]]["mu"],
+            "sigma": paper_params[data_config["dataset"]]["sigma"],
+            "n_hid": 200,
+            "resolve_silent": False,
+        },
         "device": torch.device("cuda")
         if torch.cuda.is_available()
         else torch.device("cpu"),
-        "model_type": "eventprop",
-        # "train_last_only": True,
     }
 
     training_config = {
-        "n_epochs": 2,
+        "n_epochs": 5,
         "loss": "ce_temporal",
         "alpha": 0.0,
-        "xi": 1 / model_config["tau_s"],
+        "xi": 1,
+        "beta": 6.4,
     }
 
-    optim_config = {"lr": 1e-3, "weight_decay": 0, "optimizer": "adam"}
+    optim_config = {"lr": 1e-3, "weight_decay": 0.0, "optimizer": "adam", "gamma": 0.9}
 
     config = {
         "data": data_config,

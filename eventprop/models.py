@@ -47,15 +47,30 @@ class SpikingLinear_ev(nn.Module):
         self.tau_m = kwargs.get("tau_m", 20e-3)
         self.tau_s = kwargs.get("tau_s", 5e-3)
         self.resolve_silent = kwargs.get("resolve_silent", False)
-        self.mu = kwargs.get("mu", 1)
+
+        self.mu = kwargs.get("mu", 0.1)
+        self.sigma = kwargs.get("sigma", 0.1)
+        self.scale = kwargs.get("scale", 1.0)
         self.mu_silent = 1 / np.sqrt(d1)
 
         self.alpha = np.exp(-self.dt / self.tau_s)
         self.beta = np.exp(-self.dt / self.tau_m)
-
         self.weight = nn.Parameter(torch.Tensor(d2, d1))
-        nn.init.kaiming_normal_(self.weight)
-        self.weight.data *= self.mu
+
+        self.init_mode = kwargs.get("init_mode", "kaiming")
+        if self.init_mode == "kaiming":
+            nn.init.kaiming_normal_(self.weight)
+        elif self.init_mode == "kaiming_both":
+            mu = 1 / np.sqrt(nn.init._calculate_fan_in_and_fan_out(self.weight)[0])
+            nn.init.normal_(self.weight, mu, mu)
+        elif self.init_mode == "normal":
+            nn.init.normal_(self.weight, self.mu, self.sigma)
+        elif self.init_mode == "uniform":
+            nn.init.uniform_(self.weight, -self.mu, self.mu)
+        else:
+            raise ValueError(f"Invalid init_mode {self.init_mode}")
+
+        self.weight.data *= self.scale
 
         self.forward = lambda input: self.EventProp.apply(
             input, self.weight, self.manual_forward, self.manual_backward
@@ -146,6 +161,9 @@ class SpikingLinear_su(nn.Module):
         self.mu = kwargs.get("mu", 1.0)
         self.mu_silent = 1 / np.sqrt(d1)
         self.resolve_silent = kwargs.get("resolve_silent", False)
+        self.input_dropout_p = kwargs.get("input_dropout", None)
+        if self.input_dropout_p:
+            self.input_dropout = nn.Dropout(p=self.input_dropout_p)
 
         self.weight = nn.Parameter(torch.Tensor(d2, d1))
         nn.init.kaiming_normal_(self.weight)
@@ -160,6 +178,8 @@ class SpikingLinear_su(nn.Module):
         )
 
     def forward(self, input):
+        if self.input_dropout_p:
+            input = self.input_dropout(input)
         while True:
             out_spikes = []
             voltages = []
@@ -247,7 +267,7 @@ class SpikeCELoss(nn.Module):
 
     def forward(self, input, target):
         first_spikes = self.spike_time_fn(input)
-        loss = self.celoss(-first_spikes / (self.xi * self.tau_s), target)
+        loss = self.celoss(-first_spikes / (self.xi), target)
         return loss
 
 

@@ -2,20 +2,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import torch
-from torchvision import datasets, transforms
-
-import tonic
-from yingyang.dataset import YinYangDataset
-
-from new_models import SNN, SNN2, SpikeCELoss
-from training import train, test, encode_data
-import yaml
-import random
-import snntorch as snn
-import os
 
 import torch.nn as nn
-from new_models import SpikingLinear, SpikingLinear_snntorch
+from eventprop.models import SNN
 import math
 import torch.distributions as dists
 
@@ -33,6 +22,7 @@ def get_lif_kernel(tau_mem=20e-3, tau_syn=10e-3, dt=1e-3):
 
     """
     tau_max = np.max((tau_mem, tau_syn))
+
     ts = np.arange(0, int(tau_max * 10 / dt)) * dt
     n = len(ts)
     kernel = np.empty(n)
@@ -225,7 +215,7 @@ class FluctuationDrivenNormalInitializer(Initializer):
     ):
         super().__init__(
             scaling=None,  # None, as scaling is implemented in the weight sampling
-            **kwargs
+            **kwargs,
         )
 
         self.mu_u = mu_u
@@ -242,10 +232,10 @@ class FluctuationDrivenNormalInitializer(Initializer):
         """
         if not hasattr(neuron_model, "tau_m"):
             assert hasattr(neuron_model, "beta")
-            tau_m = 1 / (1 - neuron_model.beta)
+            tau_m = 1 / (1 - neuron_model.beta) * 1e-3
 
             assert hasattr(neuron_model, "alpha")
-            tau_s = 1 / (1 - neuron_model.alpha)
+            tau_s = 1 / (1 - neuron_model.alpha) * 1e-3
 
         else:
             tau_m = neuron_model.tau_m
@@ -253,8 +243,8 @@ class FluctuationDrivenNormalInitializer(Initializer):
 
         ebar, ehat = _get_epsilon(
             self.epsilon_calc_mode,
-            tau_m * 1e-3,
-            tau_s * 1e-3,
+            tau_m,
+            tau_s,
             self.timestep,
         )
 
@@ -393,7 +383,7 @@ class FluctuationDrivenCenteredNormalInitializer(FluctuationDrivenNormalInitiali
             timestep=timestep,
             epsilon_calc_mode=epsilon_calc_mode,
             alpha=alpha,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -405,10 +395,11 @@ if __name__ == "__main__":
         "tau_s": 1,
         "mu": 1,
         "resolve_silent": True,
+        "model_type": "eventprop",
     }
 
     dims = [784, 100, 10]
-    snntorch_model = SNN2(dims, **model_kwars)
+    snntorch_model = SNN(dims, **model_kwars)
 
     dt, T = model_kwars["dt"], model_kwars["T"]
     sigma_nu, nu = 1, 15
