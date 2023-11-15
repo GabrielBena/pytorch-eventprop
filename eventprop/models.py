@@ -53,8 +53,12 @@ class SpikingLinear_ev(nn.Module):
         self.scale = kwargs.get("scale", 1.0)
         self.mu_silent = 1 / np.sqrt(d1)
 
-        self.alpha = np.exp(-self.dt / self.tau_s)
-        self.beta = np.exp(-self.dt / self.tau_m)
+        # self.alpha = np.exp(-self.dt / self.tau_s)
+        # self.beta = np.exp(-self.dt / self.tau_m)
+
+        self.alpha = 1 - self.dt / self.tau_s
+        self.beta = 1 - self.dt / self.tau_m
+
         self.weight = nn.Parameter(torch.Tensor(d2, d1))
 
         self.init_mode = kwargs.get("init_mode", "kaiming")
@@ -89,7 +93,7 @@ class SpikingLinear_ev(nn.Module):
         def backward(ctx, *grad_output):
             backward = ctx.backward
             pack = ctx.saved_tensors
-            grad_input, grad_weights = backward(grad_output[0], *pack)
+            grad_input, grad_weights, _ = backward(grad_output[0], *pack)
             return grad_input, grad_weights, None, None
 
     def __repr__(self):
@@ -101,19 +105,24 @@ class SpikingLinear_ev(nn.Module):
         V = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
         I = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
         output = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
+        input = torch.roll(input, 1, dims=0)
 
         while True:
             for i in range(steps):
-                # reset = (V[i - 1] > 1.0).float()
+
+                # spikes = (V[i - 1] > 1.0).float()
+                # V[i-1] = (1 - spikes) * V[i-1]
+
                 V[i] = self.beta * V[i - 1] + (1 - self.beta) * I[i - 1]
                 I[i] = self.alpha * I[i - 1] + F.linear(input[i].float(), self.weight)
 
                 # V[i] = (1 - reset) * V[i]
 
                 spikes = (V[i] > 1.0).float()
+                V[i] = (1 - spikes) * V[i]
+
                 output[i] = spikes
 
-                V[i] = (1 - spikes) * V[i]
 
             if self.training and self.resolve_silent:
                 is_silent = output.sum(0).mean(0) == 0
@@ -123,9 +132,11 @@ class SpikingLinear_ev(nn.Module):
             else:
                 break
 
-        return (input, I, output), (output, V)
+        return (input, V, I, output), (output, V)
 
-    def manual_backward(self, grad_output, input, I, post_spikes):
+    def manual_backward(self, grad_output, pack):
+
+        input, V, I, post_spikes = pack
         steps = input.shape[0]
 
         lV = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
@@ -143,15 +154,31 @@ class SpikingLinear_ev(nn.Module):
             lV[i] = self.beta * lV[i + 1]
 
             # Jump
-            lV[i] += post_spikes[i + 1] * (
-                (lV[i + 1] - grad_output[i + 1]) / (I[i] - 1 + 1e-10)
+            jump = post_spikes[i + 1] * (
+                (lV[i + 1] - grad_output[i + 1]) / (I[i] - V[i] + 1e-10)
             )
+            if jump.mean().data.item() != 0:
+                to_print = {
+                        'jump': jump.data,
+                        'grad_output': grad_output[i + 1].data,
+                        "V_dot" : (I[i] - V[i]).data,
+                        'lV[i+1]': lV[i + 1].data,
+                        'lI[i+1]': lI[i + 1].data,
+                        'I[i]': I[i].data,
+                        "I[i-1]" : I[i-1].data,
+                        'V[i]': V[i].data,
+                        "V[i-1]" : V[i-1].data,
+                    }
+                print(to_print)
+            lV[i] += jump
+
+
 
             # Accumulate grad
             spike_bool = input[i].float()
             grad_weight -= self.tau_s * spike_bool.unsqueeze(1) * lI[i].unsqueeze(2)
 
-        return grad_input, grad_weight
+        return grad_input, grad_weight, lV, lI
 
 
 class SpikingLinear_su(nn.Module):
