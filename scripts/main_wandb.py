@@ -143,13 +143,13 @@ def main(args, use_wandb=False):
 
 
 if __name__ == "__main__":
-    use_wandb = True
+    use_wandb = False
 
     data_config = {
         "seed": np.random.randint(1000),
-        "dataset": "mnist",
+        "dataset": "ying_yang",
         "deterministic": False,
-        "batch_size": 32,
+        "batch_size": 5,
         "encoding": "latency",
         "T": 30,
         "dt": 1e-3,
@@ -182,7 +182,7 @@ if __name__ == "__main__":
             "scale": 3.0,
             "mu": paper_params[data_config["dataset"]]["mu"],
             "sigma": paper_params[data_config["dataset"]]["sigma"],
-            "n_hid": 200,
+            "n_hid": 100,
             "resolve_silent": False,
         },
         "device": torch.device("cuda")
@@ -191,14 +191,14 @@ if __name__ == "__main__":
     }
 
     training_config = {
-        "n_epochs": 5,
+        "n_epochs": 10,
         "loss": "ce_temporal",
         "alpha": 0.0,
         "xi": 1,
         "beta": 6.4,
     }
 
-    optim_config = {"lr": 1e-3, "weight_decay": 0.0, "optimizer": "adam", "gamma": 0.9}
+    optim_config = {"lr": 1e-2, "weight_decay": 0.0, "optimizer": "adam", "gamma": 0.9}
 
     config = {
         "data": data_config,

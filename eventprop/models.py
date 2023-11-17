@@ -93,7 +93,7 @@ class SpikingLinear_ev(nn.Module):
         def backward(ctx, *grad_output):
             backward = ctx.backward
             pack = ctx.saved_tensors
-            grad_input, grad_weights, _ = backward(grad_output[0], *pack)
+            grad_input, grad_weights, *_ = backward(grad_output[0], pack)
             return grad_input, grad_weights, None, None
 
     def __repr__(self):
@@ -105,11 +105,10 @@ class SpikingLinear_ev(nn.Module):
         V = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
         I = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
         output = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
-        input = torch.roll(input, 1, dims=0)
+        # input = torch.roll(input, 1, dims=0)
 
         while True:
             for i in range(steps):
-
                 # spikes = (V[i - 1] > 1.0).float()
                 # V[i-1] = (1 - spikes) * V[i-1]
 
@@ -123,7 +122,6 @@ class SpikingLinear_ev(nn.Module):
 
                 output[i] = spikes
 
-
             if self.training and self.resolve_silent:
                 is_silent = output.sum(0).mean(0) == 0
                 self.weight.data[is_silent] += self.mu_silent
@@ -135,7 +133,6 @@ class SpikingLinear_ev(nn.Module):
         return (input, V, I, output), (output, V)
 
     def manual_backward(self, grad_output, pack):
-
         input, V, I, post_spikes = pack
         steps = input.shape[0]
 
@@ -159,20 +156,18 @@ class SpikingLinear_ev(nn.Module):
             )
             if jump.mean().data.item() != 0:
                 to_print = {
-                        'jump': jump.data,
-                        'grad_output': grad_output[i + 1].data,
-                        "V_dot" : (I[i] - V[i]).data,
-                        'lV[i+1]': lV[i + 1].data,
-                        'lI[i+1]': lI[i + 1].data,
-                        'I[i]': I[i].data,
-                        "I[i-1]" : I[i-1].data,
-                        'V[i]': V[i].data,
-                        "V[i-1]" : V[i-1].data,
-                    }
-                print(to_print)
+                    "jump": jump.data,
+                    "grad_output": grad_output[i + 1].data,
+                    "V_dot": (I[i] - V[i]).data,
+                    "lV[i+1]": lV[i + 1].data,
+                    "lI[i+1]": lI[i + 1].data,
+                    "I[i]": I[i].data,
+                    "I[i-1]": I[i - 1].data,
+                    "V[i]": V[i].data,
+                    "V[i-1]": V[i - 1].data,
+                }
+                # print(to_print)
             lV[i] += jump
-
-
 
             # Accumulate grad
             spike_bool = input[i].float()
