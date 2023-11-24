@@ -76,6 +76,8 @@ class SpikingLinear_ev(nn.Module):
 
         self.weight.data *= self.scale
 
+        self.reset_to_zero = kwargs.get("reset_to_zero", False)
+
         self.forward = lambda input: self.EventProp.apply(
             input, self.weight, self.manual_forward, self.manual_backward
         )
@@ -104,21 +106,35 @@ class SpikingLinear_ev(nn.Module):
 
         V = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
         I = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
+        V_spikes = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
         output = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
+
         # input = torch.roll(input, 1, dims=0)
+        # print("Spike is at time", input.argmax().data.item())
 
         while True:
-            for i in range(steps):
+            for i in range(1, steps):
                 # spikes = (V[i - 1] > 1.0).float()
-                # V[i-1] = (1 - spikes) * V[i-1]
+                # V[i - 1] = (1 - spikes) * V[i - 1]
 
-                V[i] = self.beta * V[i - 1] + (1 - self.beta) * I[i - 1]
-                I[i] = self.alpha * I[i - 1] + F.linear(input[i].float(), self.weight)
-
-                # V[i] = (1 - reset) * V[i]
+                input_t = F.linear(input[i - 1].float(), self.weight)
+                I[i] = self.alpha * I[i - 1] + input_t
+                V[i] = self.beta * V[i - 1] + (1 - self.beta) * I[i]
+                # if input_t.mean().data.item() != 0:
+                #     print(
+                #         str(
+                #             f"Got spike at time {i}, input is {input_t.cpu().data.numpy()}"
+                #         )
+                #     )
+                V_spikes[i] = V[i]
 
                 spikes = (V[i] > 1.0).float()
                 V[i] = (1 - spikes) * V[i]
+
+                # if self.reset_to_zero:
+                #     V[i] = (1 - spikes) * V[i]
+                # else:
+                #     V[i] -= spikes
 
                 output[i] = spikes
 
@@ -130,10 +146,12 @@ class SpikingLinear_ev(nn.Module):
             else:
                 break
 
-        return (input, V, I, output), (output, V)
+        return (input, V, V_spikes, I, output), (output, V)
 
     def manual_backward(self, grad_output, pack):
-        input, V, I, post_spikes = pack
+        input, _, V, I, post_spikes = pack
+        # input = torch.roll(input, 1, dims=0)
+        # post_spikes = torch.roll(post_spikes, 1, dims=0)
         steps = input.shape[0]
 
         lV = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
@@ -141,19 +159,22 @@ class SpikingLinear_ev(nn.Module):
 
         grad_input = torch.zeros(steps, input.shape[1], input.shape[2]).to(device)
         grad_weight = torch.zeros(input.shape[1], *self.weight.shape).to(device)
+        jumps, V_dots = [], []
 
         for i in range(steps - 2, -1, -1):
             delta = lV[i + 1] - lI[i + 1]
-            grad_input[i] = -F.linear(delta, self.weight.t())
+            grad_input[i] = F.linear(delta, self.weight.t())
 
             # Euler
             lI[i] = self.alpha * lI[i + 1] + (1 - self.alpha) * lV[i + 1]
             lV[i] = self.beta * lV[i + 1]
 
             # Jump
-            jump = post_spikes[i + 1] * (
-                (lV[i + 1] - grad_output[i + 1]) / (I[i] - V[i] + 1e-10)
-            )
+            V_dot = I[i + 1] - V[i + 1] + 1e-10
+            V_dots.append(V_dot)
+            jump = post_spikes[i + 1] * ((lV[i + 1] + grad_output[i + 1]) / V_dot)
+            jumps.append(jump)
+
             if jump.mean().data.item() != 0:
                 to_print = {
                     "jump": jump.data,
@@ -163,10 +184,20 @@ class SpikingLinear_ev(nn.Module):
                     "lI[i+1]": lI[i + 1].data,
                     "I[i]": I[i].data,
                     "I[i-1]": I[i - 1].data,
+                    "I[i+1]": I[i + 1].data,
                     "V[i]": V[i].data,
                     "V[i-1]": V[i - 1].data,
+                    "V[i+1]": V[i + 1].data,
                 }
+                # print(
+                #     str(
+                #         f"Got spike at time {i}, jump is {jump.cpu().data.numpy()}"
+                #         + f"V_dot is {V_dot.cpu().data.numpy()}"
+                #         + f"error is {grad_output[i + 1].cpu().data.numpy() }"
+                #     )
+                # )
                 # print(to_print)
+
             lV[i] += jump
 
             # Accumulate grad
@@ -314,5 +345,5 @@ class FirstSpikeTime(Function):
         k = (
             F.one_hot(first_spike_times.long(), input.shape[0]).float().permute(2, 0, 1)
         )  # T x B x N
-        grad_input = -k * grad_output.unsqueeze(0)
+        grad_input = k * grad_output.unsqueeze(0)
         return grad_input

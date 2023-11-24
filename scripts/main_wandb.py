@@ -4,6 +4,7 @@ import random
 import torch
 import torch.nn.functional as F
 import argparse
+import os
 from snntorch.functional.loss import (
     ce_temporal_loss,
     SpikeTime,
@@ -144,17 +145,18 @@ def main(args, use_wandb=False):
 
 if __name__ == "__main__":
     use_wandb = False
+    file_dir = os.path.dirname(os.path.abspath(__file__))
 
     data_config = {
         "seed": np.random.randint(1000),
-        "dataset": "ying_yang",
+        "dataset": "mnist",
         "deterministic": False,
-        "batch_size": 5,
+        "batch_size": 256,
         "encoding": "latency",
         "T": 30,
         "dt": 1e-3,
         "t_min": 2,
-        "data_folder": "data",
+        "data_folder": f"{file_dir}/../../data",
         "input_dropout": None,
     }
 
@@ -198,7 +200,7 @@ if __name__ == "__main__":
         "beta": 6.4,
     }
 
-    optim_config = {"lr": 1e-2, "weight_decay": 0.0, "optimizer": "adam", "gamma": 0.9}
+    optim_config = {"lr": 1e-3, "weight_decay": 0.0, "optimizer": "adam", "gamma": 0.9}
 
     config = {
         "data": data_config,
