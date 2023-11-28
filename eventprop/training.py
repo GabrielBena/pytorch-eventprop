@@ -62,7 +62,16 @@ def encode_data(data, args):
     return spike_data
 
 
-def train(model, criterion, optimizer, loader, args, first_spike_fn=None, pbar=None):
+def train(
+    model,
+    criterion,
+    optimizer,
+    loader,
+    args,
+    first_spike_fn=None,
+    pbar=None,
+    scheduler=None,
+):
     total_correct = 0.0
     total_loss = 0.0
     total_samples = 0.0
@@ -121,8 +130,13 @@ def train(model, criterion, optimizer, loader, args, first_spike_fn=None, pbar=N
         loss.backward()
 
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
 
         # if batch_idx % args.print_freq == 0:
+        frs = np.round(
+            np.array([s[0].data.cpu().numpy().mean() for s in all_spikes]), 2
+        )
         desc = "Batch {:03d}/{:03d}: Acc {:.2f}  Loss {:.3f} FR {}".format(
             batch_idx,
             len(loader),
@@ -131,7 +145,7 @@ def train(model, criterion, optimizer, loader, args, first_spike_fn=None, pbar=N
             / np.array(total_samples)[-n_last:].sum(),
             np.array(total_loss)[-n_last:].sum()
             / np.array(total_samples)[-n_last:].sum(),
-            np.round(np.array([s[0].data.cpu().numpy().mean() for s in all_spikes]), 2),
+            frs,
         )
         descs = pbar.desc.split("|")
         descs[0] = desc
@@ -148,6 +162,7 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
     total_loss = 0.0
     model.eval()
 
+    total_spikes = 0.0
     with torch.no_grad():
         for batch_idx, (data, target) in enumerate(loader):
             data, target = data.to(args.device), target.to(args.device)
@@ -169,12 +184,14 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
                 loss = losses[0]
             else:
                 loss = criterion(output, target)
+
             total_loss += loss
             predictions = first_spikes.data.min(1, keepdim=True)[1]
             total_correct += (
                 predictions.eq(target.data.view_as(predictions)).sum().item()
             )
             total_samples += len(target)
+            total_spikes += output.sum().item()
 
         desc = "Test: Acc {:.2f}".format(100 * total_correct / total_samples)
         if pbar is None:
@@ -186,7 +203,7 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
 
         test_acc = total_correct / total_samples
         test_loss = total_loss / len(loader)
-        return test_loss, test_acc
+        return test_loss, test_acc, total_spikes
 
 
 def train_single_model(
@@ -205,6 +222,7 @@ def train_single_model(
     train_accs, test_accs = [], []
     train_losses, test_losses = [], []
     best_loss = 1e10
+    best_model = None
 
     if use_wandb:
         if wandb.run is None:
@@ -231,11 +249,12 @@ def train_single_model(
                 args,
                 first_spike_fn=first_spike_fn,
                 pbar=pbar,
+                scheduler=scheduler,
             )
         else:
             train_loss, train_acc = None, None
 
-        test_loss, test_acc = test(
+        test_loss, test_acc, total_spikes = test(
             model,
             criterion,
             loaders["test"],
@@ -244,16 +263,20 @@ def train_single_model(
             pbar=pbar,
         )
 
+        if total_spikes == 0 and epoch > 0:
+            print("No spikes fired, stopping training")
+            break
+
         train_accs.append(train_acc)
         train_losses.append(train_loss)
         test_accs.append(test_acc)
-        test_losses.append(test_loss)
+        test_losses.append(test_loss.cpu().data.item())
 
         if test_loss < best_loss:
             best_loss = test_loss
             best_model = model.state_dict()
 
-        if use_wandb:
+        if use_wandb and epoch > 0:
             wandb.log(
                 {
                     "train_loss": train_loss,
@@ -263,8 +286,6 @@ def train_single_model(
                     "epoch": epoch,
                 }
             )
-        if scheduler is not None and epoch > 0:
-            scheduler.step()
 
     result_dict = {
         "train_acc": train_accs,

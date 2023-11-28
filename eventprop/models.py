@@ -15,6 +15,8 @@ def reset(net):
     for m in net.modules():
         if hasattr(m, "reset_hidden"):
             m.reset_hidden()
+        # else:
+        #     reset(m)
 
 
 def init_weights(w, weight_scale=1.0):
@@ -52,6 +54,8 @@ class SpikingLinear_ev(nn.Module):
         self.sigma = kwargs.get("sigma", 0.1)
         self.scale = kwargs.get("scale", 1.0)
         self.mu_silent = 1 / np.sqrt(d1)
+
+        self.dropout_p = kwargs.get("dropout", None)
 
         # self.alpha = np.exp(-self.dt / self.tau_s)
         # self.beta = np.exp(-self.dt / self.tau_m)
@@ -118,14 +122,11 @@ class SpikingLinear_ev(nn.Module):
                 # V[i - 1] = (1 - spikes) * V[i - 1]
 
                 input_t = F.linear(input[i - 1].float(), self.weight)
+                if self.dropout_p:
+                    input_t = F.dropout(input_t, p=self.dropout_p)
                 I[i] = self.alpha * I[i - 1] + input_t
                 V[i] = self.beta * V[i - 1] + (1 - self.beta) * I[i]
-                # if input_t.mean().data.item() != 0:
-                #     print(
-                #         str(
-                #             f"Got spike at time {i}, input is {input_t.cpu().data.numpy()}"
-                #         )
-                #     )
+
                 V_spikes[i] = V[i]
 
                 spikes = (V[i] > 1.0).float()
@@ -292,6 +293,9 @@ class SNN(nn.Module):
                 k: v[i] if isinstance(v, (list, np.ndarray)) else v
                 for k, v in all_kwargs.items()
             }
+            if i != 0:
+                layer_kwargs["dropout"] = None
+
             layers.append(layer(d1, d2, **layer_kwargs))
 
         if self.get_first_spikes:
