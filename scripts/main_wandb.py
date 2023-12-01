@@ -69,13 +69,31 @@ def main(args, use_wandb=False, **override_params):
             download=True,
             transform=transforms.ToTensor(),
         )
+
         if config.get("subset_sizes", None) is not None:
-            train_dataset = torch.utils.data.Subset(
-                train_dataset, indices=np.arange(config["subset_sizes"][0])
-            )
-            test_dataset = torch.utils.data.Subset(
-                test_dataset, indices=np.arange(config["subset_sizes"][1])
-            )
+            if config["subset_sizes"][0]:
+                indices = np.concatenate(
+                    [
+                        np.random.choice(
+                            np.where(train_dataset.targets == d)[0],
+                            config["subset_sizes"][0] // 10,
+                        )
+                        for d in range(10)
+                    ]
+                )
+                train_dataset = torch.utils.data.Subset(train_dataset, indices=indices)
+
+            if config["subset_sizes"][1]:
+                indices = np.concatenate(
+                    [
+                        np.random.choice(
+                            np.where(test_dataset.targets == d)[0],
+                            config["subset_sizes"][1] // 10,
+                        )
+                        for d in range(10)
+                    ]
+                )
+                test_dataset = torch.utils.data.Subset(test_dataset, indices=indices)
 
     elif config["dataset"] == "ying_yang":
         train_dataset = YinYangDataset(size=100, seed=config["seed"])
@@ -162,17 +180,17 @@ if __name__ == "__main__":
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
     data_config = {
-        "seed": np.random.randint(1000),
+        "seed": np.random.randint(10000),
         "dataset": "mnist",
-        "subset_sizes": [300, 1000],
+        "subset_sizes": [300, 2560],
         "deterministic": True,
-        "batch_size": 30,
+        "batch_size": 10,
         "encoding": "latency",
         "T": 30,
         "dt": 1e-3,
         "t_min": 2,
         "data_folder": f"{file_dir}/../../data",
-        "input_dropout": 0.3,
+        "input_dropout": 0.05,
     }
 
     paper_params = {
@@ -196,12 +214,12 @@ if __name__ == "__main__":
         },
         "weights": {
             "init_mode": "kaiming_both",
-            "scale": 5.0,
+            "scale": 5,
             "mu": paper_params[data_config["dataset"]]["mu"],
             "sigma": paper_params[data_config["dataset"]]["sigma"],
             "n_hid": 100,
             "resolve_silent": False,
-            "dropout": 0.2,
+            "dropout": 0.02,
         },
         "device": torch.device("cuda")
         if torch.cuda.is_available()
@@ -218,10 +236,10 @@ if __name__ == "__main__":
     }
 
     optim_config = {
-        "lr": 1e-1,
-        "weight_decay": 1e-6,
+        "lr": 0.05,
+        "weight_decay": 0.0,
         "optimizer": "adam",
-        "gamma": 0.5,
+        "gamma": 0.45,
     }
 
     config = {
@@ -235,16 +253,17 @@ if __name__ == "__main__":
     all_seeds = []
 
     for test in range(training_config["n_tests"]):
-        seed = np.random.randint(1000)
-        train_results = main(flat_config, use_wandb=use_wandb, seed=seed)
+        train_results = main(
+            flat_config, use_wandb=use_wandb, seed=flat_config["seed"] + test
+        )
         all_train_results.append(train_results)
-        all_seeds.append(seed)
+        all_seeds.append(flat_config["seed"] + test)
 
     all_test_accs = np.array(
-        [np.max(train_results["test_acc"]) for train_results in all_train_results]
+        [np.max(train_results["test_acc"][-3:]) for train_results in all_train_results]
     )
     all_test_losses = np.array(
-        [np.min(train_results["test_loss"]) for train_results in all_train_results]
+        [np.min(train_results["test_loss"][-3:]) for train_results in all_train_results]
     )
 
     data = [
@@ -258,24 +277,16 @@ if __name__ == "__main__":
     if use_wandb:
         wandb.log(
             {
-                "all_test_accs": wandb.plot.bar(
-                    table, "seed", "test_acc", title="Test Acc per Seed"
-                )
-            }
-        )
-        wandb.log(
-            {
-                "all_test_losses": wandb.plot.bar(
-                    table, "seed", "test_loss", title="Test Loss per Seed"
-                )
-            }
-        )
-        wandb.log(
-            {
+                "results_table": table,
                 "mean_test_acc": np.mean(all_test_accs),
                 "std_test_acc": np.std(all_test_accs),
                 "mean_test_loss": np.mean(all_test_losses),
                 "std_test_loss": np.std(all_test_losses),
             }
         )
+
         wandb.run.finish()
+
+    print(
+        f"Finished run, Mean test acc: {np.mean(all_test_accs)}, Mean test loss: {np.mean(all_test_losses)}"
+    )
