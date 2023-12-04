@@ -205,7 +205,7 @@ if __name__ == "__main__":
     }
 
     model_config = {
-        "model_type": "eventprop",
+        "model_type": "snntorch",
         "snn": {
             "T": data_config["T"],
             "dt": data_config["dt"],
@@ -214,7 +214,7 @@ if __name__ == "__main__":
         },
         "weights": {
             "init_mode": "kaiming_both",
-            "scale": 5,
+            "scale": 1,
             "mu": paper_params[data_config["dataset"]]["mu"],
             "sigma": paper_params[data_config["dataset"]]["sigma"],
             "n_hid": 100,
@@ -236,10 +236,10 @@ if __name__ == "__main__":
     }
 
     optim_config = {
-        "lr": 0.05,
-        "weight_decay": 0.0,
+        "lr": 1e-2,
+        "weight_decay": 1e-6,
         "optimizer": "adam",
-        "gamma": 0.45,
+        "gamma": 0.9,
     }
 
     config = {

@@ -263,7 +263,11 @@ def train_single_model(
             pbar=pbar,
         )
 
-        if total_spikes == 0 and epoch > 0:
+        if (
+            total_spikes == 0
+            and epoch > 0
+            and getattr(model, "model_type", "eventprop")
+        ) == "eventprop":
             print("No spikes fired, stopping training")
             break
 

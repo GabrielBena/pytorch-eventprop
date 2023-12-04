@@ -1,1 +1,0 @@
-wandb agent m2snn/eventprop/8foo16tq

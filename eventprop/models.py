@@ -180,15 +180,18 @@ class SpikingLinear_ev(nn.Module):
                 to_print = {
                     "jump": jump.data,
                     "grad_output": grad_output[i + 1].data,
+                    "grad_input": grad_input[i].data,
                     "V_dot": (I[i] - V[i]).data,
                     "lV[i+1]": lV[i + 1].data,
                     "lI[i+1]": lI[i + 1].data,
-                    "I[i]": I[i].data,
-                    "I[i-1]": I[i - 1].data,
-                    "I[i+1]": I[i + 1].data,
-                    "V[i]": V[i].data,
-                    "V[i-1]": V[i - 1].data,
-                    "V[i+1]": V[i + 1].data,
+                    "lV[i]": lV[i].data,
+                    "lI[i]": lI[i].data,
+                    # "I[i]": I[i].data,
+                    # "I[i-1]": I[i - 1].data,
+                    # "I[i+1]": I[i + 1].data,
+                    # "V[i]": V[i].data,
+                    # "V[i-1]": V[i - 1].data,
+                    # "V[i+1]": V[i + 1].data,
                 }
                 # print(
                 #     str(
@@ -272,20 +275,25 @@ class SNN(nn.Module):
 
         self.get_first_spikes = all_kwargs.get("get_first_spikes", False)
 
-        layer_type = all_kwargs.get("layer_type", None)
-        model_type = all_kwargs.get("model_type", None)
+        self.layer_type = all_kwargs.get("layer_type", None)
+        self.model_type = all_kwargs.get("model_type", None)
+
         assert not (
-            layer_type is None and model_type is None
+            self.layer_type is None and self.model_type is None
         ), "Must specify layer_type or model_type"
 
-        if model_type is not None:
-            assert model_type in model_types, f"Invalid model_type {model_type}"
-            layer = model_types[model_type]
-            self.eventprop = model_type == "eventprop"
+        if self.model_type is not None:
+            assert (
+                self.model_type in model_types
+            ), f"Invalid model_type {self.model_type}"
+            layer = model_types[self.model_type]
+            self.eventprop = self.model_type == "eventprop"
         else:
-            assert layer_type in layer_types, f"Invalid layer_type {layer_type}"
-            layer = layer_types[layer_type]
-            self.eventprop = layer_type == str(SpikingLinear_ev)
+            assert (
+                self.layer_type in layer_types
+            ), f"Invalid layer_type {self.layer_type}"
+            layer = layer_types[self.layer_type]
+            self.eventprop = self.layer_type == str(SpikingLinear_ev)
 
         layers = []
         for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
@@ -314,12 +322,11 @@ class SNN(nn.Module):
 
 
 class SpikeCELoss(nn.Module):
-    def __init__(self, xi, tau_s):
+    def __init__(self, xi):
         super(SpikeCELoss, self).__init__()
         self.spike_time_fn = FirstSpikeTime.apply
         # self.spike_time_fn = SpikeTime().first_spike_fn
         self.xi = xi
-        self.tau_s = tau_s
         self.celoss = nn.CrossEntropyLoss()
 
     def forward(self, input, target):
