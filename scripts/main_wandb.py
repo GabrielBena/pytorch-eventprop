@@ -145,11 +145,11 @@ def main(args, use_wandb=False, **override_params):
         if config["model_type"] == "snntorch":
             criterion = ce_temporal_loss()
         elif config["model_type"] == "eventprop":
-            criterion = SpikeCELoss(config["xi"], config["tau_s"])
+            criterion = SpikeCELoss(config["xi"])
         else:
             raise ValueError("Invalid model type")
     elif config["loss"] == "ce_both":
-        criterion = [ce_temporal_loss(), SpikeCELoss(config["xi"], config["tau_s"])]
+        criterion = [ce_temporal_loss(), SpikeCELoss(config["xi"])]
     elif config["loss"] == "ce_rate":
         criterion = ce_rate_loss()
     elif config["loss"] == "ce_count":
