@@ -36,7 +36,10 @@ class RecordingSequential(nn.Sequential):
             recs.append(x)
             if isinstance(x, tuple):
                 x = x[0]
-        return x, recs
+            elif isinstance(x, dict):
+                x = x["output"]
+
+        return {"output": x, "recordings": recs}
 
 
 class SpikingLinear_ev(nn.Module):
@@ -147,7 +150,15 @@ class SpikingLinear_ev(nn.Module):
             else:
                 break
 
-        return (input, V, V_spikes, I, output), (output, V)
+        # return (input, V, V_spikes, I, output), (output, V)
+        return (
+            (input, V, V_spikes, I, output),
+            {
+                "output": output,
+                "V": V,
+                "I": I,
+            },
+        )
 
     def manual_backward(self, grad_output, pack):
         input, _, V, I, post_spikes = pack
@@ -240,14 +251,18 @@ class SpikingLinear_su(nn.Module):
         while True:
             out_spikes = []
             voltages = []
+            currents = []
             for t, in_spikes in enumerate(input):
                 out = F.linear(in_spikes, self.weight)
                 spikes = self.syn(out)
                 out_spikes.append(spikes)
                 voltages.append(self.syn.mem)
+                currents.append(self.syn.syn)
 
             out_spikes = torch.stack(out_spikes, dim=0)
             voltages = torch.stack(voltages, dim=0)
+            currents = torch.stack(currents, dim=0)
+
             if self.training and self.resolve_silent:
                 is_silent = out_spikes.sum(0).mean(0) == 0
                 self.weight.data[is_silent] += self.mu_silent
@@ -256,7 +271,7 @@ class SpikingLinear_su(nn.Module):
             else:
                 break
 
-        return out_spikes, voltages
+        return {"output": out_spikes, "V": voltages, "I": currents}
 
     def __repr__(self):
         return f"Spiking Linear ({self.input_dim}, {self.output_dim})"
@@ -315,10 +330,12 @@ class SNN(nn.Module):
         if not self.eventprop:
             input = input.float()
             reset(self)
-        out, all_recs = self.layers(input)
+        # out, all_recs = self.layers(input)
+        out_dict = self.layers(input)
+        out = out_dict["output"]
         if self.get_first_spikes:
             out = self.outact(out)
-        return out, all_recs
+        return out, out_dict["recordings"]
 
 
 class SpikeCELoss(nn.Module):
