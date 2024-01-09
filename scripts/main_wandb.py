@@ -176,7 +176,7 @@ def main(args, use_wandb=False, **override_params):
 
 
 if __name__ == "__main__":
-    use_wandb = False
+    use_wandb = True
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
     data_config = {
@@ -233,7 +233,7 @@ if __name__ == "__main__":
         "alpha": 0.0,
         "xi": 1,
         "beta": 6.4,
-        "n_tests": 1,
+        "n_tests": 10,
     }
 
     optim_config = {
@@ -249,6 +249,7 @@ if __name__ == "__main__":
         "training": training_config,
         "optim": optim_config,
     }
+    
     flat_config = get_flat_dict_from_nested(config)
     all_train_results = []
     all_seeds = []
