@@ -91,7 +91,7 @@ def train(
         input, target = input.to(args.device), target.to(args.device)
         input = encode_data(input, args)
 
-        output, all_spikes = model(input)
+        output, out_dict = model(input)
         if first_spike_fn:
             if isinstance(first_spike_fn, (list, tuple)):
                 all_first_spikes = tuple(fn(output) for fn in first_spike_fn)
@@ -135,7 +135,7 @@ def train(
 
         # if batch_idx % args.print_freq == 0:
         frs = np.round(
-            np.array([s[0].data.cpu().numpy().mean() for s in all_spikes]), 2
+            np.array([s.data.cpu().numpy().mean() for s in out_dict["spikes"]]), 2
         )
         desc = "Batch {:03d}/{:03d}: Acc {:.2f}  Loss {:.3f} FR {}".format(
             batch_idx,

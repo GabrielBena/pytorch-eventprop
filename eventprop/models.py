@@ -33,12 +33,22 @@ class RecordingSequential(nn.Sequential):
         recs = []
         for module in self._modules.values():
             x = module(x)
-            recs.append(x)
             if isinstance(x, tuple):
+                recs.append(x[1])
                 x = x[0]
             elif isinstance(x, dict):
-                x = x["output"]
+                if "output" in x:
+                    x = x["output"]
+                elif "spikes" in x:
+                    x = x["spikes"]
+                else:
+                    raise ValueError(f"Invalid dict {x}")
+                recs.append(x)
 
+        try:
+            recs = {k: [r[k] for r in recs] for k in recs[0].keys()}
+        except TypeError:
+            pass
         return {"output": x, "recordings": recs}
 
 
@@ -94,9 +104,9 @@ class SpikingLinear_ev(nn.Module):
         @staticmethod
         def forward(ctx, input, weights, manual_forward, manual_backward):
             ctx.backward = manual_backward
-            pack, output = manual_forward(input)
+            output, pack, output_dict = manual_forward(input)
             ctx.save_for_backward(*pack)
-            return output
+            return output, output_dict
 
         @staticmethod
         def backward(ctx, *grad_output):
@@ -150,15 +160,13 @@ class SpikingLinear_ev(nn.Module):
             else:
                 break
 
-        # return (input, V, V_spikes, I, output), (output, V)
-        return (
-            (input, V, V_spikes, I, output),
-            {
-                "output": output,
-                "V": V,
-                "I": I,
-            },
-        )
+        output_dict = {
+            "spikes": output,
+            "V": V,
+            "I": I,
+        }
+        pack = (input, V, V_spikes, I, output)
+        return output, pack, output_dict
 
     def manual_backward(self, grad_output, pack):
         input, _, V, I, post_spikes = pack
@@ -249,29 +257,35 @@ class SpikingLinear_su(nn.Module):
         if self.input_dropout_p:
             input = self.input_dropout(input)
         while True:
-            out_spikes = []
-            voltages = []
-            currents = []
-            for t, in_spikes in enumerate(input):
-                out = F.linear(in_spikes, self.weight)
-                spikes = self.syn(out)
-                out_spikes.append(spikes)
-                voltages.append(self.syn.mem)
-                currents.append(self.syn.syn)
+            steps = input.shape[0]
+            V = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
+            I = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
+            output = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
 
-            out_spikes = torch.stack(out_spikes, dim=0)
-            voltages = torch.stack(voltages, dim=0)
-            currents = torch.stack(currents, dim=0)
+            # out_spikes = []
+            # voltages = []
+            # currents = []
+
+            for i in range(1, steps):
+                out = F.linear(input[i - 1], self.weight)
+                # for t, in_spikes in enumerate(input):
+                # out = F.linear(in_spikes, self.weight)
+                spikes = self.syn(out)
+
+                output[i] = spikes
+                V[i] = self.syn.mem
+                I[i] = self.syn.syn
 
             if self.training and self.resolve_silent:
-                is_silent = out_spikes.sum(0).mean(0) == 0
+                is_silent = output.sum(0).mean(0) == 0
                 self.weight.data[is_silent] += self.mu_silent
                 if is_silent.sum() == 0:
                     break
             else:
                 break
 
-        return {"output": out_spikes, "V": voltages, "I": currents}
+        out_dict = {"spikes": output, "V": V, "I": I}
+        return output, out_dict
 
     def __repr__(self):
         return f"Spiking Linear ({self.input_dim}, {self.output_dim})"
@@ -339,7 +353,7 @@ class SNN(nn.Module):
 
 
 class SpikeCELoss(nn.Module):
-    def __init__(self, xi):
+    def __init__(self, xi=1):
         super(SpikeCELoss, self).__init__()
         self.spike_time_fn = FirstSpikeTime.apply
         # self.spike_time_fn = SpikeTime().first_spike_fn
