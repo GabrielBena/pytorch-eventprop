@@ -176,7 +176,7 @@ def main(args, use_wandb=False, **override_params):
 
 
 if __name__ == "__main__":
-    use_wandb = True
+    use_wandb = False
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
     data_config = {
@@ -205,7 +205,7 @@ if __name__ == "__main__":
     }
 
     model_config = {
-        "model_type": "snntorch",
+        "model_type": "eventprop",
         "snn": {
             "T": data_config["T"],
             "dt": data_config["dt"],
@@ -214,7 +214,7 @@ if __name__ == "__main__":
         },
         "weights": {
             "init_mode": "kaiming_both",
-            "scale": 1,
+            "scale": 3,
             "mu": paper_params[data_config["dataset"]]["mu"],
             "sigma": paper_params[data_config["dataset"]]["sigma"],
             "n_hid": 100,
@@ -233,7 +233,7 @@ if __name__ == "__main__":
         "alpha": 0.0,
         "xi": 1,
         "beta": 6.4,
-        "n_tests": 20,
+        "n_tests": 1,
     }
 
     optim_config = {

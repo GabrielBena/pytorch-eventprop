@@ -1,1 +1,1 @@
-wandb agent m2snn/eventprop/9n3mfcu8
+wandb agent m2snn/eventprop/r9sv30w0
