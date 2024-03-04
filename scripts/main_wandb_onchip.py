@@ -11,7 +11,7 @@ from snntorch.functional.loss import (
     ce_rate_loss,
     ce_count_loss,
 )
-from torch.utils.data.dataset import ConcatDataset
+
 from torchvision import datasets, transforms
 from yingyang.dataset import YinYangDataset
 from eventprop.models import SNN, SpikeCELoss
@@ -96,21 +96,13 @@ def main(args, use_wandb=False, **override_params):
                 test_dataset = torch.utils.data.Subset(test_dataset, indices=indices)
 
     elif config["dataset"] == "ying_yang":
-
         train_dataset = YinYangDataset(
             size=config["subset_sizes"][0] if config["subset_sizes"][0] else 5000,
             seed=config["seed"],
         )
-        test_dataset = ConcatDataset(
-            [
-                YinYangDataset(
-                    size=(
-                        config["subset_sizes"][1] if config["subset_sizes"][1] else 2000
-                    ),
-                    seed=config["seed"] + i,
-                )
-                for i in range(1, 5)
-            ],
+        test_dataset = YinYangDataset(
+            size=config["subset_sizes"][1] if config["subset_sizes"][1] else 1000,
+            seed=config["seed"] + 1,
         )
 
     else:
@@ -202,18 +194,17 @@ if __name__ == "__main__":
 
     use_wandb = True
     file_dir = os.path.dirname(os.path.abspath(__file__))
-    sweep_id = "4w6mstdk"
-    use_best_params = True
+    sweep_id = "c2mo2pk5"
+    use_best_params = False
 
     data_config = {
-        # seed: 1352
         "seed": np.random.randint(10000),
         "dataset": "ying_yang",
-        "subset_sizes": [5000, 1000],
+        "subset_sizes": [100, 1000],
         "deterministic": True,
-        "batch_size": 32,
+        "batch_size": 1,
         "encoding": "latency",
-        "T": 30,
+        "T": 50,
         "dt": 1e-3,
         "t_min": 2,
         "data_folder": f"{file_dir}/../../data",
@@ -226,8 +217,8 @@ if __name__ == "__main__":
             "sigma": [0.045, 0.37],
         },
         "ying_yang": {
-            "mu": [1.5, 0.93],
-            "sigma": [0.78, 0.1],
+            "mu": [1.5, 0.78],
+            "sigma": [0.93, 0.1],
         },
     }
 
@@ -241,12 +232,9 @@ if __name__ == "__main__":
         },
         "weights": {
             "init_mode": "kaiming_both",
-            "scale_0_mu": 3,
-            "scale_0_sigma": 1.5,
-            "scale_1_mu": 5,
-            "scale_1_sigma": 2.5,
-            # "mu": paper_params[data_config["dataset"]]["mu"],
-            # "sigma": paper_params[data_config["dataset"]]["sigma"],
+            "scale": 5,
+            "mu": paper_params[data_config["dataset"]]["mu"],
+            "sigma": paper_params[data_config["dataset"]]["sigma"],
             "n_hid": 120,
             "resolve_silent": False,
             "dropout": 0.0,
@@ -256,30 +244,18 @@ if __name__ == "__main__":
         ),
     }
 
-    if not "scale" in model_config["weights"]:
-        # model_config["weights"]["scale"] = [
-        #     v for k, v in model_config["weights"].items() if "scale" in k
-        # ]
-        model_config["weights"]["scale"] = [
-            [v_mu, v_sigma]
-            for v_mu, v_sigma in zip(
-                [v for k, v in model_config["weights"].items() if "mu" in k],
-                [v for k, v in model_config["weights"].items() if "sigma" in k],
-            )
-        ]
-
     training_config = {
-        "n_epochs": 60,
+        "n_epochs": 2,
         "loss": "ce_temporal",
-        "alpha": 3e-3,
-        "xi": 0.5,
+        "alpha": 0.01,
+        "xi": 1,
         "beta": 6.4,
-        "n_tests": 3,
+        "n_tests": 25,
     }
 
     optim_config = {
-        "lr": 5e-3,
-        "weight_decay": 0.0,
+        "lr": 1e-3,
+        "weight_decay": 1e-7,
         "optimizer": "adam",
         "gamma": 0.95,
     }
@@ -316,10 +292,10 @@ if __name__ == "__main__":
         all_seeds.append(flat_config["seed"] + test)
 
     all_test_accs = np.array(
-        [np.max(train_results["test_acc"][:]) for train_results in all_train_results]
+        [train_results["test_acc"][-1] for train_results in all_train_results]
     )
     all_test_losses = np.array(
-        [np.min(train_results["test_loss"][:]) for train_results in all_train_results]
+        [train_results["test_loss"][-1] for train_results in all_train_results]
     )
 
     data = [
