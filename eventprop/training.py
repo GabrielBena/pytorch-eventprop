@@ -29,6 +29,30 @@ def is_notebook():
     return notebook
 
 
+def get_label_outputs(output_matrix, labels):
+    # Get the indices for all dimensions except the last one
+    indices = np.indices(labels.shape)
+
+    # Use advanced indexing to get the outputs of the label classes
+    label_outputs = output_matrix[tuple(indices) + (labels,)]
+
+    return label_outputs
+
+
+def compute_accuracy(first_spike_times, labels):
+    correct = first_spike_times.argmin(-1) == labels
+    single_spiking = (
+        np.count_nonzero(
+            get_label_outputs(first_spike_times, labels)[..., None]
+            == first_spike_times,
+            axis=-1,
+        )
+        == 1
+    )
+    correct = np.logical_and(correct, single_spiking)
+    return correct.mean(), correct
+
+
 def encode_data(data, args):
     if not isinstance(data, torch.Tensor):
         data = torch.from_numpy(data)
@@ -109,7 +133,7 @@ def train(
             [s.retain_grad() for s in spk_times]
             loss = sum(losses)
         else:
-            loss = criterion(output, target)
+            loss = criterion(output, target)[0]
 
         if args.alpha != 0:
             target_first_spike_times = first_spikes.gather(1, target.view(-1, 1))
@@ -118,10 +142,14 @@ def train(
                 * (torch.exp(target_first_spike_times / (args.beta)) - 1).mean()
             )
 
-        predictions = first_spikes.data.min(-1, keepdim=True)[1]
-        total_correct.append(
-            predictions.eq(target.data.view_as(predictions)).sum().item()
+        # predictions = first_spikes.data.min(-1, keepdim=True)[1]
+        # total_correct.append(
+        #     predictions.eq(target.data.view_as(predictions)).sum().item()
+        # )
+        accuracy, correct = compute_accuracy(
+            first_spikes.cpu().detach().numpy(), target.cpu().detach().numpy()
         )
+        total_correct.append(correct.sum())
         total_loss.append(loss.item() * len(target))
         total_samples.append(len(target))
 
@@ -183,14 +211,18 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
                 losses = [c(o, target)[0] for o, c in zip(outputs, criterion)]
                 loss = losses[0]
             else:
-                loss = criterion(output, target)
+                loss = criterion(output, target)[0]
 
             total_loss += loss
-            predictions = first_spikes.data.min(1, keepdim=True)[1]
-            total_correct += (
-                predictions.eq(target.data.view_as(predictions)).sum().item()
+            # predictions = first_spikes.data.min(1, keepdim=True)[1]
+            # total_correct += (
+            #     predictions.eq(target.data.view_as(predictions)).sum().item()
+            # )
+            accuracy, correct = compute_accuracy(
+                first_spikes.cpu().detach().numpy(), target.cpu().detach().numpy()
             )
-            total_samples += len(target)
+            total_correct += correct.sum()
+            total_samples += target.numel()
             total_spikes += output.sum().item()
 
         desc = "Test: Acc {:.2f}".format(100 * total_correct / total_samples)
