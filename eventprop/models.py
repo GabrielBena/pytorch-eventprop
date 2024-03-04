@@ -65,8 +65,10 @@ class SpikingLinear_ev(nn.Module):
 
         self.mu = kwargs.get("mu", 0.1)
         self.sigma = kwargs.get("sigma", 0.1)
+
         self.scale = kwargs.get("scale", 1.0)
         self.mu_silent = 1 / np.sqrt(d1)
+        self.seed = kwargs.get("seed", None)
 
         self.dropout_p = kwargs.get("dropout", None)
 
@@ -79,11 +81,23 @@ class SpikingLinear_ev(nn.Module):
         self.weight = nn.Parameter(torch.Tensor(d2, d1))
 
         self.init_mode = kwargs.get("init_mode", "kaiming")
+
+        if self.seed is not None:
+            torch.manual_seed(self.seed)
+            np.random.seed(self.seed)
+
         if self.init_mode == "kaiming":
             nn.init.kaiming_normal_(self.weight)
         elif self.init_mode == "kaiming_both":
-            mu = 1 / np.sqrt(nn.init._calculate_fan_in_and_fan_out(self.weight)[0])
-            nn.init.normal_(self.weight, mu, mu)
+            div = 1 / np.sqrt(nn.init._calculate_fan_in_and_fan_out(self.weight)[0])
+            if isinstance(self.scale, list):
+                mu, sigma = [self.scale[0] * div, self.scale[1] * div]
+            else:
+                mu, sigma = self.scale * div, self.scale * div
+            self.weight.data = torch.from_numpy(
+                np.random.normal(mu, sigma, self.weight.T.shape).T
+            ).float()
+            # nn.init.normal_(self.weight, mu, mu)
         elif self.init_mode == "normal":
             nn.init.normal_(self.weight, self.mu, self.sigma)
         elif self.init_mode == "uniform":
@@ -91,7 +105,8 @@ class SpikingLinear_ev(nn.Module):
         else:
             raise ValueError(f"Invalid init_mode {self.init_mode}")
 
-        self.weight.data *= self.scale
+        if self.init_mode != "kaiming_both":
+            self.weight.data *= self.scale
 
         self.reset_to_zero = kwargs.get("reset_to_zero", False)
 
@@ -104,15 +119,21 @@ class SpikingLinear_ev(nn.Module):
         @staticmethod
         def forward(ctx, input, weights, manual_forward, manual_backward):
             ctx.backward = manual_backward
-            output, pack, output_dict = manual_forward(input)
+            output, pack, fwd_dict = manual_forward(input)
             ctx.save_for_backward(*pack)
-            return output, output_dict
+            return output, fwd_dict
 
         @staticmethod
         def backward(ctx, *grad_output):
             backward = ctx.backward
             pack = ctx.saved_tensors
-            grad_input, grad_weights, *_ = backward(grad_output[0], pack)
+            grad_input, grad_weights, lV, lI = backward(grad_output[0], pack)
+            bwd_dict = {
+                "grad_input": grad_input,
+                "grad_weights": grad_weights,
+                "lV": lV,
+                "lI": lI,
+            }
             return grad_input, grad_weights, None, None
 
     def __repr__(self):
@@ -165,10 +186,12 @@ class SpikingLinear_ev(nn.Module):
             "V": V,
             "I": I,
         }
+        self.fwd_dict = output_dict
         pack = (input, V, V_spikes, I, output)
         return output, pack, output_dict
 
     def manual_backward(self, grad_output, pack):
+        # print("Grad Output is : ", grad_output.shape, grad_output.abs().max(0))
         input, _, V, I, post_spikes = pack
         # input = torch.roll(input, 1, dims=0)
         # post_spikes = torch.roll(post_spikes, 1, dims=0)
@@ -227,6 +250,16 @@ class SpikingLinear_ev(nn.Module):
             spike_bool = input[i].float()
             grad_weight -= self.tau_s * spike_bool.unsqueeze(1) * lI[i].unsqueeze(2)
 
+        output_dict = {
+            "lV": lV,
+            "lI": lI,
+            "jumps": jumps,
+            "V_dots": V_dots,
+            "grad_input": grad_input,
+            "grad_weight": grad_weight,
+        }
+        self.bwd_dict = output_dict
+
         return grad_input, grad_weight, lV, lI
 
 
@@ -234,16 +267,18 @@ class SpikingLinear_su(nn.Module):
     def __init__(self, d1, d2, **kwargs) -> None:
         super().__init__()
         self.input_dim, self.output_dim = d1, d2
+        print(f"Creating Spiking Linear with {d1} -> {d2}")
         self.mu = kwargs.get("mu", 1.0)
-        self.mu_silent = 1 / np.sqrt(d1)
+        self.mu_silent = 1 / np.sqrt(d1) if d1 is not None else None
         self.resolve_silent = kwargs.get("resolve_silent", False)
         self.input_dropout_p = kwargs.get("input_dropout", None)
         if self.input_dropout_p:
             self.input_dropout = nn.Dropout(p=self.input_dropout_p)
 
-        self.weight = nn.Parameter(torch.Tensor(d2, d1))
-        nn.init.kaiming_normal_(self.weight)
-        self.weight.data *= self.mu
+        if d1 is not None:
+            self.weight = nn.Parameter(torch.Tensor(d2, d1))
+            nn.init.kaiming_normal_(self.weight)
+            self.weight.data *= self.mu
 
         self.syn = snn.Synaptic(
             alpha=np.exp(-kwargs["dt"] / kwargs["tau_s"]),
@@ -254,6 +289,12 @@ class SpikingLinear_su(nn.Module):
         )
 
     def forward(self, input):
+        if self.input_dim is None:
+            self.input_dim = input.shape[-1]
+            self.weight = nn.Parameter(torch.Tensor(self.output_dim, self.input_dim))
+            nn.init.kaiming_normal_(self.weight)
+            self.weight.data *= self.mu
+
         if self.input_dropout_p:
             input = self.input_dropout(input)
         while True:
@@ -300,7 +341,7 @@ model_types = {
 
 class SNN(nn.Module):
     def __init__(self, dims, **all_kwargs):
-        super(SNN, self).__init__()
+        super().__init__()
 
         self.get_first_spikes = all_kwargs.get("get_first_spikes", False)
 
@@ -325,11 +366,20 @@ class SNN(nn.Module):
             self.eventprop = self.layer_type == str(SpikingLinear_ev)
 
         layers = []
+        if all_kwargs.get("seed", None) is not None:
+            seed = all_kwargs.pop("seed")
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+
         for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
             layer_kwargs = {
                 k: v[i] if isinstance(v, (list, np.ndarray)) else v
                 for k, v in all_kwargs.items()
             }
+
+            # print(
+            #     f"Creating layer with params {dict({k: v[i] for k, v in all_kwargs.items() if isinstance(v, (list, np.ndarray))})}"
+            # )
             if i != 0:
                 layer_kwargs["dropout"] = None
 
@@ -358,12 +408,12 @@ class SpikeCELoss(nn.Module):
         self.spike_time_fn = FirstSpikeTime.apply
         # self.spike_time_fn = SpikeTime().first_spike_fn
         self.xi = xi
-        self.celoss = nn.CrossEntropyLoss()
+        self.celoss = nn.CrossEntropyLoss(reduction="mean")
 
     def forward(self, input, target):
         first_spikes = self.spike_time_fn(input)
         loss = self.celoss(-first_spikes / (self.xi), target)
-        return loss
+        return loss, first_spikes
 
 
 class FirstSpikeTime(Function):
@@ -387,5 +437,6 @@ class FirstSpikeTime(Function):
         k = (
             F.one_hot(first_spike_times.long(), input.shape[0]).float().permute(2, 0, 1)
         )  # T x B x N
+        # print(grad_output.shape, grad_output)
         grad_input = k * grad_output.unsqueeze(0)
         return grad_input
