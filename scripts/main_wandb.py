@@ -156,6 +156,7 @@ def main(args, use_wandb=False, **override_params):
     optimizer = optimizers_type[config["optimizer"]](
         model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"]
     )
+
     if config.get("gamma", None) is not None:
         scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer, step_size=1, gamma=(config["gamma"]) ** (1 / len(train_loader))
@@ -202,8 +203,8 @@ if __name__ == "__main__":
 
     use_wandb = True
     file_dir = os.path.dirname(os.path.abspath(__file__))
-    sweep_id = "4w6mstdk"
-    use_best_params = True
+    sweep_id = "h78iekx0"
+    use_best_params = False
 
     data_config = {
         # seed: 1352
@@ -245,8 +246,8 @@ if __name__ == "__main__":
             "scale_0_sigma": 1.5,
             "scale_1_mu": 5,
             "scale_1_sigma": 2.5,
-            # "mu": paper_params[data_config["dataset"]]["mu"],
-            # "sigma": paper_params[data_config["dataset"]]["sigma"],
+            "mu": paper_params[data_config["dataset"]]["mu"],
+            "sigma": paper_params[data_config["dataset"]]["sigma"],
             "n_hid": 120,
             "resolve_silent": False,
             "dropout": 0.0,
@@ -275,6 +276,7 @@ if __name__ == "__main__":
         "xi": 0.5,
         "beta": 6.4,
         "n_tests": 3,
+        "exclude_equal": False,
     }
 
     optim_config = {

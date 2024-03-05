@@ -9,6 +9,7 @@ from snntorch import utils
 from snntorch.functional import SpikeTime
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from snn_maml.snn_model import MetaModuleNg, MetaModule
 
 
 def reset(net):
@@ -52,7 +53,7 @@ class RecordingSequential(nn.Sequential):
         return {"output": x, "recordings": recs}
 
 
-class SpikingLinear_ev(nn.Module):
+class SpikingLinear_ev(MetaModule):
     def __init__(self, d1, d2, **kwargs):
         super(SpikingLinear_ev, self).__init__()
 
@@ -440,3 +441,68 @@ class FirstSpikeTime(Function):
         # print(grad_output.shape, grad_output)
         grad_input = k * grad_output.unsqueeze(0)
         return grad_input
+
+
+class Meta_SNN(MetaModuleNg):
+    def __init__(self, dims, **all_kwargs):
+        super().__init__()
+
+        self.get_first_spikes = all_kwargs.get("get_first_spikes", False)
+
+        self.layer_type = all_kwargs.get("layer_type", None)
+        self.model_type = all_kwargs.get("model_type", None)
+
+        assert not (
+            self.layer_type is None and self.model_type is None
+        ), "Must specify layer_type or model_type"
+
+        if self.model_type is not None:
+            assert (
+                self.model_type in model_types
+            ), f"Invalid model_type {self.model_type}"
+            layer = model_types[self.model_type]
+            self.eventprop = self.model_type == "eventprop"
+        else:
+            assert (
+                self.layer_type in layer_types
+            ), f"Invalid layer_type {self.layer_type}"
+            layer = layer_types[self.layer_type]
+            self.eventprop = self.layer_type == str(SpikingLinear_ev)
+
+        layers = []
+        if all_kwargs.get("seed", None) is not None:
+            seed = all_kwargs.pop("seed")
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+
+        for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
+            layer_kwargs = {
+                k: v[i] if isinstance(v, (list, np.ndarray)) else v
+                for k, v in all_kwargs.items()
+            }
+
+            # print(
+            #     f"Creating layer with params {dict({k: v[i] for k, v in all_kwargs.items() if isinstance(v, (list, np.ndarray))})}"
+            # )
+            if i != 0:
+                layer_kwargs["dropout"] = None
+
+            layers.append(layer(d1, d2, **layer_kwargs))
+
+        if self.get_first_spikes:
+            self.outact = SpikeTime().first_spike_fn
+
+        self.first_spike_fn = SpikeTime().first_spike_fn
+
+        self.layers = RecordingSequential(*layers)
+
+    def forward(self, input, params=None):
+        if not self.eventprop:
+            input = input.float()
+            reset(self)
+        # out, all_recs = self.layers(input)
+        out_dict = self.layers(input)
+        out = out_dict["output"]
+        if self.get_first_spikes:
+            out = self.outact(out)
+        return out  # , out_dict["recordings"]

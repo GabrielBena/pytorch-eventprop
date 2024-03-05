@@ -39,17 +39,19 @@ def get_label_outputs(output_matrix, labels):
     return label_outputs
 
 
-def compute_accuracy(first_spike_times, labels):
+def compute_accuracy(first_spike_times, labels, exclude_equal=True):
     correct = first_spike_times.argmin(-1) == labels
-    single_spiking = (
-        np.count_nonzero(
-            get_label_outputs(first_spike_times, labels)[..., None]
-            == first_spike_times,
-            axis=-1,
+    if exclude_equal:
+        single_spiking = (
+            np.count_nonzero(
+                get_label_outputs(first_spike_times, labels)[..., None]
+                == first_spike_times,
+                axis=-1,
+            )
+            == 1
         )
-        == 1
-    )
-    correct = np.logical_and(correct, single_spiking)
+        correct = np.logical_and(correct, single_spiking)
+
     return correct.mean(), correct
 
 
@@ -147,7 +149,9 @@ def train(
         #     predictions.eq(target.data.view_as(predictions)).sum().item()
         # )
         accuracy, correct = compute_accuracy(
-            first_spikes.cpu().detach().numpy(), target.cpu().detach().numpy()
+            first_spikes.cpu().detach().numpy(),
+            target.cpu().detach().numpy(),
+            exclude_equal=args.exclude_equal,
         )
         total_correct.append(correct.sum())
         total_loss.append(loss.item() * len(target))
@@ -219,7 +223,9 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
             #     predictions.eq(target.data.view_as(predictions)).sum().item()
             # )
             accuracy, correct = compute_accuracy(
-                first_spikes.cpu().detach().numpy(), target.cpu().detach().numpy()
+                first_spikes.cpu().detach().numpy(),
+                target.cpu().detach().numpy(),
+                exclude_equal=args.exclude_equal,
             )
             total_correct += correct.sum()
             total_samples += target.numel()
