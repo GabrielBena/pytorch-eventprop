@@ -44,8 +44,7 @@ def compute_accuracy(first_spike_times, labels, exclude_equal=True):
     if exclude_equal:
         single_spiking = (
             np.count_nonzero(
-                get_label_outputs(first_spike_times, labels)[..., None]
-                == first_spike_times,
+                get_label_outputs(first_spike_times, labels)[..., None] == first_spike_times,
                 axis=-1,
             )
             == 1
@@ -71,9 +70,7 @@ def encode_data(data, args):
         else:
             if args.t_max is None:
                 args.t_max = int(args.T * 3 / 5)
-            spike_data = args.t_min + (args.t_max - args.t_min) * (data < 0.5).view(
-                data.shape[0], -1
-            )
+            spike_data = args.t_min + (args.t_max - args.t_min) * (data < 0.5).view(data.shape[0], -1)
             spike_data = F.one_hot(spike_data.long(), int(args.T)).permute(2, 0, 1)
 
         if args.dataset == "ying_yang":
@@ -139,10 +136,7 @@ def train(
 
         if args.alpha != 0:
             target_first_spike_times = first_spikes.gather(1, target.view(-1, 1))
-            loss += (
-                args.alpha
-                * (torch.exp(target_first_spike_times / (args.beta)) - 1).mean()
-            )
+            loss += args.alpha * (torch.exp(target_first_spike_times / (args.beta)) - 1).mean()
 
         # predictions = first_spikes.data.min(-1, keepdim=True)[1]
         # total_correct.append(
@@ -166,17 +160,12 @@ def train(
             scheduler.step()
 
         # if batch_idx % args.print_freq == 0:
-        frs = np.round(
-            np.array([s.data.cpu().numpy().mean() for s in out_dict["spikes"]]), 2
-        )
+        frs = np.round(np.array([s.data.cpu().numpy().mean() for s in out_dict["spikes"]]), 2)
         desc = "Batch {:03d}/{:03d}: Acc {:.2f}  Loss {:.3f} FR {}".format(
             batch_idx,
             len(loader),
-            100
-            * np.array(total_correct)[-n_last:].sum()
-            / np.array(total_samples)[-n_last:].sum(),
-            np.array(total_loss)[-n_last:].sum()
-            / np.array(total_samples)[-n_last:].sum(),
+            100 * np.array(total_correct)[-n_last:].sum() / np.array(total_samples)[-n_last:].sum(),
+            np.array(total_loss)[-n_last:].sum() / np.array(total_samples)[-n_last:].sum(),
             frs,
         )
         descs = pbar.desc.split("|")
@@ -302,9 +291,7 @@ def train_single_model(
         )
 
         if (
-            total_spikes == 0
-            and epoch > 0
-            and getattr(model, "model_type", "eventprop")
+            total_spikes == 0 and epoch > 0 and getattr(model, "model_type", "eventprop")
         ) == "eventprop":
             print("No spikes fired, stopping training")
             break

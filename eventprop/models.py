@@ -7,9 +7,26 @@ import numpy as np
 import snntorch as snn
 from snntorch import utils
 from snntorch.functional import SpikeTime
+from collections import OrderedDict
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-from snn_maml.snn_model import MetaModuleNg, MetaModule
+from torchmeta.modules import MetaModule
+from snn_maml.rec_attr import rec_setattr, rec_getattr
+
+
+class MetaModuleNg(MetaModule):
+    """
+    MetaModule that returns only elements that require_grad
+    """
+
+    def meta_named_parameters(self, prefix="", recurse=True):
+        gen = self._named_members(
+            lambda module: (module._parameters.items() if isinstance(module, MetaModule) else []),
+            prefix=prefix,
+            recurse=recurse,
+        )
+        for elem in gen:
+            if elem[1].requires_grad:
+                yield elem
 
 
 def reset(net):
@@ -30,10 +47,17 @@ class RecordingSequential(nn.Sequential):
     def __init__(self, *modules):
         super(RecordingSequential, self).__init__(*modules)
 
-    def forward(self, x):
+    def forward(self, x, params=None):
         recs = []
-        for module in self._modules.values():
-            x = module(x)
+        if params is not None:
+            assert len(params) == len(self._modules)
+        else:
+            params = {n: None for n in self._modules}
+        for module, param in zip(self._modules.values(), params.values()):
+            try:
+                x = module(x, params=param)
+            except TypeError:
+                x = module(x)
             if isinstance(x, tuple):
                 recs.append(x[1])
                 x = x[0]
@@ -111,16 +135,28 @@ class SpikingLinear_ev(MetaModule):
 
         self.reset_to_zero = kwargs.get("reset_to_zero", False)
 
-        self.forward = lambda input: self.EventProp.apply(
-            input, self.weight, self.manual_forward, self.manual_backward
+        self.device = kwargs.get(
+            "device", torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
+
+        # self.forward = lambda input: self.EventProp.apply(
+        #     input, self.weight, self.manual_forward, self.manual_backward
+        # )
+
+    def forward(self, input, params=None):
+        if params is not None:
+            # print("Using params")
+            return self.EventProp.apply(input, params, self.manual_forward, self.manual_backward)
+        else:
+            return self.EventProp.apply(input, self.weight, self.manual_forward, self.manual_backward)
 
     @staticmethod
     class EventProp(Function):
         @staticmethod
         def forward(ctx, input, weights, manual_forward, manual_backward):
             ctx.backward = manual_backward
-            output, pack, fwd_dict = manual_forward(input)
+            ctx.weights = weights
+            output, pack, fwd_dict = manual_forward(input, weights)
             ctx.save_for_backward(*pack)
             return output, fwd_dict
 
@@ -128,7 +164,8 @@ class SpikingLinear_ev(MetaModule):
         def backward(ctx, *grad_output):
             backward = ctx.backward
             pack = ctx.saved_tensors
-            grad_input, grad_weights, lV, lI = backward(grad_output[0], pack)
+            weights = ctx.weights
+            grad_input, grad_weights, lV, lI = backward(grad_output[0], pack, weights)
             bwd_dict = {
                 "grad_input": grad_input,
                 "grad_weights": grad_weights,
@@ -140,13 +177,13 @@ class SpikingLinear_ev(MetaModule):
     def __repr__(self):
         return super().__repr__()[:-1] + f"{self.input_dim}, {self.output_dim})"
 
-    def manual_forward(self, input):
+    def manual_forward(self, input, weights=None):
         steps = input.shape[0]
 
-        V = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
-        I = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
-        V_spikes = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
-        output = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
+        V = torch.zeros(steps, input.shape[1], self.output_dim).to(self.device)
+        I = torch.zeros(steps, input.shape[1], self.output_dim).to(self.device)
+        V_spikes = torch.zeros(steps, input.shape[1], self.output_dim).to(self.device)
+        output = torch.zeros(steps, input.shape[1], self.output_dim).to(self.device)
 
         # input = torch.roll(input, 1, dims=0)
         # print("Spike is at time", input.argmax().data.item())
@@ -156,7 +193,7 @@ class SpikingLinear_ev(MetaModule):
                 # spikes = (V[i - 1] > 1.0).float()
                 # V[i - 1] = (1 - spikes) * V[i - 1]
 
-                input_t = F.linear(input[i - 1].float(), self.weight)
+                input_t = F.linear(input[i - 1].float(), self.weight if weights is None else weights)
                 if self.dropout_p:
                     input_t = F.dropout(input_t, p=self.dropout_p)
                 I[i] = self.alpha * I[i - 1] + input_t
@@ -191,23 +228,23 @@ class SpikingLinear_ev(MetaModule):
         pack = (input, V, V_spikes, I, output)
         return output, pack, output_dict
 
-    def manual_backward(self, grad_output, pack):
+    def manual_backward(self, grad_output, pack, weights=None):
         # print("Grad Output is : ", grad_output.shape, grad_output.abs().max(0))
         input, _, V, I, post_spikes = pack
         # input = torch.roll(input, 1, dims=0)
         # post_spikes = torch.roll(post_spikes, 1, dims=0)
         steps = input.shape[0]
 
-        lV = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
-        lI = torch.zeros(steps, input.shape[1], self.output_dim).to(device)
+        lV = torch.zeros(steps, input.shape[1], self.output_dim).to(self.device)
+        lI = torch.zeros(steps, input.shape[1], self.output_dim).to(self.device)
 
-        grad_input = torch.zeros(steps, input.shape[1], input.shape[2]).to(device)
-        grad_weight = torch.zeros(input.shape[1], *self.weight.shape).to(device)
+        grad_input = torch.zeros(steps, input.shape[1], input.shape[2]).to(self.device)
+        grad_weight = torch.zeros(input.shape[1], *self.weight.shape).to(self.device)
         jumps, V_dots = [], []
 
         for i in range(steps - 2, -1, -1):
             delta = lV[i + 1] - lI[i + 1]
-            grad_input[i] = F.linear(delta, self.weight.t())
+            grad_input[i] = F.linear(delta, self.weight.t() if weights is None else weights.t())
 
             # Euler
             lI[i] = self.alpha * lI[i + 1] + (1 - self.alpha) * lV[i + 1]
@@ -250,6 +287,7 @@ class SpikingLinear_ev(MetaModule):
             # Accumulate grad
             spike_bool = input[i].float()
             grad_weight -= self.tau_s * spike_bool.unsqueeze(1) * lI[i].unsqueeze(2)
+            # grad_weight -= spike_bool.unsqueeze(1)
 
         output_dict = {
             "lV": lV,
@@ -261,7 +299,7 @@ class SpikingLinear_ev(MetaModule):
         }
         self.bwd_dict = output_dict
 
-        return grad_input, grad_weight, lV, lI
+        return grad_input.data, grad_weight.data, lV, lI
 
 
 class SpikingLinear_su(nn.Module):
@@ -334,10 +372,7 @@ class SpikingLinear_su(nn.Module):
 
 
 layer_types = {str(t): t for t in [SpikingLinear_ev, SpikingLinear_su]}
-model_types = {
-    m: t
-    for m, t in zip(["eventprop", "snntorch"], [SpikingLinear_ev, SpikingLinear_su])
-}
+model_types = {m: t for m, t in zip(["eventprop", "snntorch"], [SpikingLinear_ev, SpikingLinear_su])}
 
 
 class SNN(nn.Module):
@@ -354,15 +389,11 @@ class SNN(nn.Module):
         ), "Must specify layer_type or model_type"
 
         if self.model_type is not None:
-            assert (
-                self.model_type in model_types
-            ), f"Invalid model_type {self.model_type}"
+            assert self.model_type in model_types, f"Invalid model_type {self.model_type}"
             layer = model_types[self.model_type]
             self.eventprop = self.model_type == "eventprop"
         else:
-            assert (
-                self.layer_type in layer_types
-            ), f"Invalid layer_type {self.layer_type}"
+            assert self.layer_type in layer_types, f"Invalid layer_type {self.layer_type}"
             layer = layer_types[self.layer_type]
             self.eventprop = self.layer_type == str(SpikingLinear_ev)
 
@@ -374,8 +405,7 @@ class SNN(nn.Module):
 
         for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
             layer_kwargs = {
-                k: v[i] if isinstance(v, (list, np.ndarray)) else v
-                for k, v in all_kwargs.items()
+                k: v[i] if isinstance(v, (list, np.ndarray)) else v for k, v in all_kwargs.items()
             }
 
             # print(
@@ -404,29 +434,28 @@ class SNN(nn.Module):
 
 
 class SpikeCELoss(nn.Module):
-    def __init__(self, xi=1):
-        super(SpikeCELoss, self).__init__()
+    def __init__(self, xi=1, alpha=0.0, beta=6.4):
+        super().__init__()
         self.spike_time_fn = FirstSpikeTime.apply
         # self.spike_time_fn = SpikeTime().first_spike_fn
         self.xi = xi
+        self.alpha = alpha
+        self.beta = beta
         self.celoss = nn.CrossEntropyLoss(reduction="mean")
 
     def forward(self, input, target):
+        if len(target.shape) == 0:
+            target = target.unsqueeze(0)
         first_spikes = self.spike_time_fn(input)
         loss = self.celoss(-first_spikes / (self.xi), target)
+
         return loss, first_spikes
 
 
 class FirstSpikeTime(Function):
     @staticmethod
     def forward(ctx, input):
-        idx = (
-            torch.arange(input.shape[0], 0, -1)
-            .unsqueeze(-1)
-            .unsqueeze(-1)
-            .float()
-            .to(device)
-        )
+        idx = torch.arange(input.shape[0], 0, -1).unsqueeze(-1).unsqueeze(-1).float().to(input.device)
         first_spike_times = torch.argmax(idx * input, dim=0).float()
         ctx.save_for_backward(input, first_spike_times.clone())
         first_spike_times[first_spike_times == 0] = input.shape[0] - 1
@@ -435,9 +464,7 @@ class FirstSpikeTime(Function):
     @staticmethod
     def backward(ctx, grad_output):
         input, first_spike_times = ctx.saved_tensors
-        k = (
-            F.one_hot(first_spike_times.long(), input.shape[0]).float().permute(2, 0, 1)
-        )  # T x B x N
+        k = F.one_hot(first_spike_times.long(), input.shape[0]).float().permute(2, 0, 1)  # T x B x N
         # print(grad_output.shape, grad_output)
         grad_input = k * grad_output.unsqueeze(0)
         return grad_input
@@ -457,15 +484,11 @@ class Meta_SNN(MetaModuleNg):
         ), "Must specify layer_type or model_type"
 
         if self.model_type is not None:
-            assert (
-                self.model_type in model_types
-            ), f"Invalid model_type {self.model_type}"
+            assert self.model_type in model_types, f"Invalid model_type {self.model_type}"
             layer = model_types[self.model_type]
             self.eventprop = self.model_type == "eventprop"
         else:
-            assert (
-                self.layer_type in layer_types
-            ), f"Invalid layer_type {self.layer_type}"
+            assert self.layer_type in layer_types, f"Invalid layer_type {self.layer_type}"
             layer = layer_types[self.layer_type]
             self.eventprop = self.layer_type == str(SpikingLinear_ev)
 
@@ -477,8 +500,7 @@ class Meta_SNN(MetaModuleNg):
 
         for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
             layer_kwargs = {
-                k: v[i] if isinstance(v, (list, np.ndarray)) else v
-                for k, v in all_kwargs.items()
+                k: v[i] if isinstance(v, (list, np.ndarray)) else v for k, v in all_kwargs.items()
             }
 
             # print(
@@ -496,13 +518,25 @@ class Meta_SNN(MetaModuleNg):
 
         self.layers = RecordingSequential(*layers)
 
+        self.initial_params = OrderedDict(self.meta_named_parameters()).copy()
+
     def forward(self, input, params=None):
         if not self.eventprop:
             input = input.float()
             reset(self)
-        # out, all_recs = self.layers(input)
-        out_dict = self.layers(input)
+        if len(input.shape) > 3:
+            input = input.squeeze().transpose(0, 1)
+
+        # if params is not None:
+        #     for n, p in params.items():
+        #         rec_setattr(self, n, p)
+
+        out_dict = self.layers(input, params)
         out = out_dict["output"]
         if self.get_first_spikes:
             out = self.outact(out)
+        # if params is not None:
+        #     for n, p in self.initial_params.items():
+        #         rec_setattr(self, n, p)
+
         return out  # , out_dict["recordings"]

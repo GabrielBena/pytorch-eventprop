@@ -2,6 +2,8 @@
 .history
 data
 wandb
+graphs
+
 # Created by https://www.toptal.com/developers/gitignore/api/python,vs,jupyternotebooks
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,vs,jupyternotebooks
 

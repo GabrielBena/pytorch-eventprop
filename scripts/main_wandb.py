@@ -25,13 +25,9 @@ def main(args, use_wandb=False, **override_params):
     elif isinstance(args, dict):
         config = args
     else:
-        raise ValueError(
-            "Invalid type for run configuration, must be dict or Namespace"
-        )
+        raise ValueError("Invalid type for run configuration, must be dict or Namespace")
 
-    config["device"] = config.get(
-        "device", torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    )
+    config["device"] = config.get("device", torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 
     if use_wandb:
         if wandb.run is None:
@@ -104,9 +100,7 @@ def main(args, use_wandb=False, **override_params):
         test_dataset = ConcatDataset(
             [
                 YinYangDataset(
-                    size=(
-                        config["subset_sizes"][1] if config["subset_sizes"][1] else 2000
-                    ),
+                    size=(config["subset_sizes"][1] if config["subset_sizes"][1] else 2000),
                     seed=config["seed"] + i,
                 )
                 for i in range(1, 5)
@@ -121,9 +115,7 @@ def main(args, use_wandb=False, **override_params):
     )
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size=(
-            min(256, config["subset_sizes"][1]) if config["subset_sizes"][1] else 256
-        ),
+        batch_size=(min(256, config["subset_sizes"][1]) if config["subset_sizes"][1] else 256),
         shuffle=False,
         drop_last=True,
     )
@@ -172,6 +164,7 @@ def main(args, use_wandb=False, **override_params):
             criterion = SpikeCELoss(config["xi"])
         else:
             raise ValueError("Invalid model type")
+
     elif config["loss"] == "ce_both":
         criterion = [ce_temporal_loss(), SpikeCELoss(config["xi"])]
     elif config["loss"] == "ce_rate":
@@ -201,14 +194,16 @@ def main(args, use_wandb=False, **override_params):
 
 if __name__ == "__main__":
 
-    use_wandb = True
+    use_wandb = False
     file_dir = os.path.dirname(os.path.abspath(__file__))
-    sweep_id = "h78iekx0"
-    use_best_params = False
+    sweep_id = "bf3ost8a"
+    use_best_params = True
+    # use_run_params = "seq6m529"
+    use_run_params = None
 
     data_config = {
-        # seed: 1352
-        "seed": np.random.randint(10000),
+        "seed": 4422,
+        # "seed": np.random.randint(10000),
         "dataset": "ying_yang",
         "subset_sizes": [5000, 1000],
         "deterministic": True,
@@ -252,9 +247,8 @@ if __name__ == "__main__":
             "resolve_silent": False,
             "dropout": 0.0,
         },
-        "device": (
-            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        ),
+        # "device": (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")),
+        "device": torch.device("cpu"),
     }
 
     if not "scale" in model_config["weights"]:
@@ -275,7 +269,7 @@ if __name__ == "__main__":
         "alpha": 3e-3,
         "xi": 0.5,
         "beta": 6.4,
-        "n_tests": 3,
+        "n_tests": 1,
         "exclude_equal": False,
     }
 
@@ -303,9 +297,15 @@ if __name__ == "__main__":
         sweep = api.sweep(sweep_path)
         best_run = sweep.best_run()
         best_params = best_run.config
-        best_params.pop("seed")
+    elif use_run_params:
+        api = wandb.Api()
+        run = api.run(f"m2snn/eventprop/{use_run_params}")
+        best_params = run.config
     else:
         best_params = {}
+
+    best_params.pop("seed")
+    best_params.pop("device")
 
     for test in range(training_config["n_tests"]):
         train_results = main(
@@ -326,9 +326,7 @@ if __name__ == "__main__":
 
     data = [
         [test_accs, test_losses, seed]
-        for test_accs, test_losses, seed in zip(
-            all_test_accs, all_test_losses, all_seeds
-        )
+        for test_accs, test_losses, seed in zip(all_test_accs, all_test_losses, all_seeds)
     ]
     table = wandb.Table(data=data, columns=["test_acc", "test_loss", "seed"])
 

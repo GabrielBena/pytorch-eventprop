@@ -16,11 +16,11 @@ keywords = ["snntorch", "eventprop", "pytorch"]
 
 authors = [
 {name = "Pedro Savarese", email =  "savarese@ttic.edu"},
-{name = "Gabriel Béna", email =  "gabriel.bena@prophesee.com"},
+{name = "Gabriel Béna", email =  "gabriel.bena@spinncloud.com"},
 ]
 
 maintainers = [
-{name = "Gabriel Béna", email =  "gabriel.bena@prophesee.com"},
+{name = "Gabriel Béna", email =  "gabriel.bena@spinncloud.com"},
 ]
 
 dependencies = [ 
