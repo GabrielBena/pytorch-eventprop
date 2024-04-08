@@ -9,24 +9,10 @@ from snntorch import utils
 from snntorch.functional import SpikeTime
 from collections import OrderedDict
 
-from torchmeta.modules import MetaModule
-from snn_maml.rec_attr import rec_setattr, rec_getattr
-
-
-class MetaModuleNg(MetaModule):
-    """
-    MetaModule that returns only elements that require_grad
-    """
-
-    def meta_named_parameters(self, prefix="", recurse=True):
-        gen = self._named_members(
-            lambda module: (module._parameters.items() if isinstance(module, MetaModule) else []),
-            prefix=prefix,
-            recurse=recurse,
-        )
-        for elem in gen:
-            if elem[1].requires_grad:
-                yield elem
+try:
+    from torchmeta.modules import MetaModule
+except ImportError:
+    from torch.nn import Module as MetaModule
 
 
 def reset(net):
@@ -500,73 +486,96 @@ class FirstSpikeTime(Function):
         return grad_input
 
 
-class Meta_SNN(MetaModuleNg):
-    def __init__(self, dims, **all_kwargs):
-        super().__init__()
+try:
 
-        self.get_first_spikes = all_kwargs.get("get_first_spikes", False)
+    class MetaModuleNg(MetaModule):
+        """
+        MetaModule that returns only elements that require_grad
+        """
 
-        self.layer_type = all_kwargs.get("layer_type", None)
-        self.model_type = all_kwargs.get("model_type", None)
+        def meta_named_parameters(self, prefix="", recurse=True):
+            gen = self._named_members(
+                lambda module: (
+                    module._parameters.items() if isinstance(module, MetaModule) else []
+                ),
+                prefix=prefix,
+                recurse=recurse,
+            )
+            for elem in gen:
+                if elem[1].requires_grad:
+                    yield elem
 
-        assert not (
-            self.layer_type is None and self.model_type is None
-        ), "Must specify layer_type or model_type"
+    class Meta_SNN(MetaModuleNg):
+        def __init__(self, dims, **all_kwargs):
+            super().__init__()
 
-        if self.model_type is not None:
-            assert self.model_type in model_types, f"Invalid model_type {self.model_type}"
-            layer = model_types[self.model_type]
-            self.eventprop = self.model_type == "eventprop"
-        else:
-            assert self.layer_type in layer_types, f"Invalid layer_type {self.layer_type}"
-            layer = layer_types[self.layer_type]
-            self.eventprop = self.layer_type == str(SpikingLinear_ev)
+            self.get_first_spikes = all_kwargs.get("get_first_spikes", False)
 
-        layers = []
-        if all_kwargs.get("seed", None) is not None:
-            seed = all_kwargs.pop("seed")
-            torch.manual_seed(seed)
-            np.random.seed(seed)
+            self.layer_type = all_kwargs.get("layer_type", None)
+            self.model_type = all_kwargs.get("model_type", None)
 
-        for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
-            layer_kwargs = {
-                k: v[i] if isinstance(v, (list, np.ndarray)) else v for k, v in all_kwargs.items()
-            }
+            assert not (
+                self.layer_type is None and self.model_type is None
+            ), "Must specify layer_type or model_type"
 
-            # print(
-            #     f"Creating layer with params {dict({k: v[i] for k, v in all_kwargs.items() if isinstance(v, (list, np.ndarray))})}"
-            # )
-            if i != 0:
-                layer_kwargs["dropout"] = None
+            if self.model_type is not None:
+                assert self.model_type in model_types, f"Invalid model_type {self.model_type}"
+                layer = model_types[self.model_type]
+                self.eventprop = self.model_type == "eventprop"
+            else:
+                assert self.layer_type in layer_types, f"Invalid layer_type {self.layer_type}"
+                layer = layer_types[self.layer_type]
+                self.eventprop = self.layer_type == str(SpikingLinear_ev)
 
-            layers.append(layer(d1, d2, **layer_kwargs))
+            layers = []
+            if all_kwargs.get("seed", None) is not None:
+                seed = all_kwargs.pop("seed")
+                torch.manual_seed(seed)
+                np.random.seed(seed)
 
-        if self.get_first_spikes:
-            self.outact = SpikeTime().first_spike_fn
+            for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
+                layer_kwargs = {
+                    k: v[i] if isinstance(v, (list, np.ndarray)) else v
+                    for k, v in all_kwargs.items()
+                }
 
-        self.first_spike_fn = SpikeTime().first_spike_fn
+                # print(
+                #     f"Creating layer with params {dict({k: v[i] for k, v in all_kwargs.items() if isinstance(v, (list, np.ndarray))})}"
+                # )
+                if i != 0:
+                    layer_kwargs["dropout"] = None
 
-        self.layers = RecordingSequential(*layers)
+                layers.append(layer(d1, d2, **layer_kwargs))
 
-        self.initial_params = OrderedDict(self.meta_named_parameters()).copy()
+            if self.get_first_spikes:
+                self.outact = SpikeTime().first_spike_fn
 
-    def forward(self, input, params=None):
-        if not self.eventprop:
-            input = input.float()
-            reset(self)
-        if len(input.shape) > 3:
-            input = input.squeeze().transpose(0, 1)
+            self.first_spike_fn = SpikeTime().first_spike_fn
 
-        # if params is not None:
-        #     for n, p in params.items():
-        #         rec_setattr(self, n, p)
+            self.layers = RecordingSequential(*layers)
 
-        out_dict = self.layers(input, params)
-        out = out_dict["output"]
-        if self.get_first_spikes:
-            out = self.outact(out)
-        # if params is not None:
-        #     for n, p in self.initial_params.items():
-        #         rec_setattr(self, n, p)
+            self.initial_params = OrderedDict(self.meta_named_parameters()).copy()
 
-        return out  # , out_dict["recordings"]
+        def forward(self, input, params=None):
+            if not self.eventprop:
+                input = input.float()
+                reset(self)
+            if len(input.shape) > 3:
+                input = input.squeeze().transpose(0, 1)
+
+            # if params is not None:
+            #     for n, p in params.items():
+            #         rec_setattr(self, n, p)
+
+            out_dict = self.layers(input, params)
+            out = out_dict["output"]
+            if self.get_first_spikes:
+                out = self.outact(out)
+            # if params is not None:
+            #     for n, p in self.initial_params.items():
+            #         rec_setattr(self, n, p)
+
+            return out  # , out_dict["recordings"]
+
+except NameError:
+    pass
