@@ -100,8 +100,12 @@ class SpikingLinear_ev(MetaModule):
         # self.alpha = np.exp(-self.dt / self.tau_s)
         # self.beta = np.exp(-self.dt / self.tau_m)
 
-        self.alpha = 1 - self.dt / self.tau_s
-        self.beta = 1 - self.dt / self.tau_m
+        self.alpha = np.exp(-self.dt / self.tau_s)
+        self.beta = np.exp(-self.dt / self.tau_m)
+
+        # print(
+        #     f"Creating Spiking Linear with {d1} -> {d2} with alpha {self.alpha} and beta {self.beta}"
+        # )
 
         self.weight = nn.Parameter(torch.Tensor(d2, d1))
 
@@ -148,7 +152,9 @@ class SpikingLinear_ev(MetaModule):
             # print("Using params")
             return self.EventProp.apply(input, params, self.manual_forward, self.manual_backward)
         else:
-            return self.EventProp.apply(input, self.weight, self.manual_forward, self.manual_backward)
+            return self.EventProp.apply(
+                input, self.weight, self.manual_forward, self.manual_backward
+            )
 
     @staticmethod
     class EventProp(Function):
@@ -193,7 +199,9 @@ class SpikingLinear_ev(MetaModule):
                 # spikes = (V[i - 1] > 1.0).float()
                 # V[i - 1] = (1 - spikes) * V[i - 1]
 
-                input_t = F.linear(input[i - 1].float(), self.weight if weights is None else weights)
+                input_t = F.linear(
+                    input[i - 1].float(), self.weight if weights is None else weights
+                )
                 if self.dropout_p:
                     input_t = F.dropout(input_t, p=self.dropout_p)
                 I[i] = self.alpha * I[i - 1] + input_t
@@ -371,8 +379,10 @@ class SpikingLinear_su(nn.Module):
         return f"Spiking Linear ({self.input_dim}, {self.output_dim})"
 
 
-layer_types = {str(t): t for t in [SpikingLinear_ev, SpikingLinear_su]}
-model_types = {m: t for m, t in zip(["eventprop", "snntorch"], [SpikingLinear_ev, SpikingLinear_su])}
+layer_types = {str(l): l for l in [SpikingLinear_ev, SpikingLinear_su]}
+model_types = {
+    m: l for m, l in zip(["eventprop", "snntorch"], [SpikingLinear_ev, SpikingLinear_su])
+}
 
 
 class SNN(nn.Module):
@@ -411,6 +421,7 @@ class SNN(nn.Module):
             # print(
             #     f"Creating layer with params {dict({k: v[i] for k, v in all_kwargs.items() if isinstance(v, (list, np.ndarray))})}"
             # )
+
             if i != 0:
                 layer_kwargs["dropout"] = None
 
@@ -420,6 +431,12 @@ class SNN(nn.Module):
             self.outact = SpikeTime().first_spike_fn
 
         self.layers = RecordingSequential(*layers)
+
+    def to(self, device):
+        self.device = device
+        for l in self.layers:
+            l.device = device
+        return super().to(device)
 
     def forward(self, input):
         if not self.eventprop:
@@ -449,22 +466,35 @@ class SpikeCELoss(nn.Module):
         first_spikes = self.spike_time_fn(input)
         loss = self.celoss(-first_spikes / (self.xi), target)
 
-        return loss, first_spikes
+        if self.alpha != 0:
+            target_first_spike_times = first_spikes.gather(1, target.view(-1, 1))
+            reg_loss = (
+                loss + self.alpha * (torch.exp(target_first_spike_times / (self.beta)) - 1).mean()
+            )
+        else:
+            reg_loss = loss
+
+        return reg_loss, loss, first_spikes
 
 
 class FirstSpikeTime(Function):
     @staticmethod
     def forward(ctx, input):
-        idx = torch.arange(input.shape[0], 0, -1).unsqueeze(-1).unsqueeze(-1).float().to(input.device)
+        idx = (
+            torch.arange(input.shape[0], 0, -1).unsqueeze(-1).unsqueeze(-1).float().to(input.device)
+        )
         first_spike_times = torch.argmax(idx * input, dim=0).float()
         ctx.save_for_backward(input, first_spike_times.clone())
-        first_spike_times[first_spike_times == 0] = input.shape[0] - 1
+        assert not (first_spike_times == input.shape[0]).any(), "Last ts is not a spike time"
+        first_spike_times[first_spike_times == 0] = input.shape[0]
         return first_spike_times
 
     @staticmethod
     def backward(ctx, grad_output):
         input, first_spike_times = ctx.saved_tensors
-        k = F.one_hot(first_spike_times.long(), input.shape[0]).float().permute(2, 0, 1)  # T x B x N
+        k = (
+            F.one_hot(first_spike_times.long(), input.shape[0]).float().permute(2, 0, 1)
+        )  # T x B x N
         # print(grad_output.shape, grad_output)
         grad_input = k * grad_output.unsqueeze(0)
         return grad_input

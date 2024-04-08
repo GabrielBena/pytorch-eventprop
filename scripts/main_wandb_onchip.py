@@ -25,13 +25,9 @@ def main(args, use_wandb=False, **override_params):
     elif isinstance(args, dict):
         config = args
     else:
-        raise ValueError(
-            "Invalid type for run configuration, must be dict or Namespace"
-        )
+        raise ValueError("Invalid type for run configuration, must be dict or Namespace")
 
-    config["device"] = config.get(
-        "device", torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    )
+    config["device"] = config.get("device", torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 
     if use_wandb:
         if wandb.run is None:
@@ -113,9 +109,7 @@ def main(args, use_wandb=False, **override_params):
     )
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size=(
-            min(256, config["subset_sizes"][1]) if config["subset_sizes"][1] else 256
-        ),
+        batch_size=(min(256, config["subset_sizes"][1]) if config["subset_sizes"][1] else 256),
         shuffle=False,
         drop_last=True,
     )
@@ -192,9 +186,9 @@ def main(args, use_wandb=False, **override_params):
 
 if __name__ == "__main__":
 
-    use_wandb = True
+    use_wandb = False
     file_dir = os.path.dirname(os.path.abspath(__file__))
-    sweep_id = "c2mo2pk5"
+    sweep_id = "ffxoxwfe"
     use_best_params = False
 
     data_config = {
@@ -239,9 +233,7 @@ if __name__ == "__main__":
             "resolve_silent": False,
             "dropout": 0.0,
         },
-        "device": (
-            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        ),
+        "device": (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")),
     }
 
     training_config = {
@@ -254,9 +246,9 @@ if __name__ == "__main__":
     }
 
     optim_config = {
-        "lr": 1e-3,
+        "optimizer": "sgd",
+        "lr": 1.0,
         "weight_decay": 1e-7,
-        "optimizer": "adam",
         "gamma": 0.95,
     }
 
@@ -277,9 +269,10 @@ if __name__ == "__main__":
         sweep = api.sweep(sweep_path)
         best_run = sweep.best_run()
         best_params = best_run.config
-        best_params.pop("seed")
     else:
         best_params = {}
+    best_params.pop("seed", None)
+    best_params.pop("device", None)
 
     for test in range(training_config["n_tests"]):
         train_results = main(
@@ -291,18 +284,12 @@ if __name__ == "__main__":
         all_train_results.append(train_results)
         all_seeds.append(flat_config["seed"] + test)
 
-    all_test_accs = np.array(
-        [train_results["test_acc"][-1] for train_results in all_train_results]
-    )
-    all_test_losses = np.array(
-        [train_results["test_loss"][-1] for train_results in all_train_results]
-    )
+    all_test_accs = np.array([train_results["test_acc"][-1] for train_results in all_train_results])
+    all_test_losses = np.array([train_results["test_loss"][-1] for train_results in all_train_results])
 
     data = [
         [test_accs, test_losses, seed]
-        for test_accs, test_losses, seed in zip(
-            all_test_accs, all_test_losses, all_seeds
-        )
+        for test_accs, test_losses, seed in zip(all_test_accs, all_test_losses, all_seeds)
     ]
     table = wandb.Table(data=data, columns=["test_acc", "test_loss", "seed"])
 

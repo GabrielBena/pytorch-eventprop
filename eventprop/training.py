@@ -57,20 +57,29 @@ def compute_accuracy(first_spike_times, labels, exclude_equal=True):
 def encode_data(data, args):
     if not isinstance(data, torch.Tensor):
         data = torch.from_numpy(data)
+    if isinstance(args, dict):
+        args = argparse.Namespace(**args)
+
     if "latency" in args.encoding:
         if not "eventprop" in args.encoding:
             spike_data = latency(
                 data,
-                args.T,
+                args.T if args.t_max is None else args.T - args.t_max,
                 first_spike_time=args.t_min,
                 normalize=True,
                 linear=True,
                 interpolate=False,
             ).flatten(start_dim=2)
+
+            if args.t_max is not None:
+                spike_data = torch.cat([spike_data, torch.zeros_like(spike_data[-args.t_max :])], 0)
+
         else:
             if args.t_max is None:
                 args.t_max = int(args.T * 3 / 5)
-            spike_data = args.t_min + (args.t_max - args.t_min) * (data < 0.5).view(data.shape[0], -1)
+            spike_data = args.t_min + (args.t_max - args.t_min) * (data < 0.5).view(
+                data.shape[0], -1
+            )
             spike_data = F.one_hot(spike_data.long(), int(args.T)).permute(2, 0, 1)
 
         if args.dataset == "ying_yang":
@@ -134,14 +143,6 @@ def train(
         else:
             loss = criterion(output, target)[0]
 
-        if args.alpha != 0:
-            target_first_spike_times = first_spikes.gather(1, target.view(-1, 1))
-            loss += args.alpha * (torch.exp(target_first_spike_times / (args.beta)) - 1).mean()
-
-        # predictions = first_spikes.data.min(-1, keepdim=True)[1]
-        # total_correct.append(
-        #     predictions.eq(target.data.view_as(predictions)).sum().item()
-        # )
         accuracy, correct = compute_accuracy(
             first_spikes.cpu().detach().numpy(),
             target.cpu().detach().numpy(),
@@ -202,15 +203,12 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
             if isinstance(criterion, (list, tuple)):
                 outputs = [output.clone() for _ in criterion]
                 losses = [c(o, target)[0] for o, c in zip(outputs, criterion)]
-                loss = losses[0]
+                loss = losses[0][1]
             else:
-                loss = criterion(output, target)[0]
+                loss = criterion(output, target)[1]
 
             total_loss += loss
-            # predictions = first_spikes.data.min(1, keepdim=True)[1]
-            # total_correct += (
-            #     predictions.eq(target.data.view_as(predictions)).sum().item()
-            # )
+
             accuracy, correct = compute_accuracy(
                 first_spikes.cpu().detach().numpy(),
                 target.cpu().detach().numpy(),
@@ -244,6 +242,7 @@ def train_single_model(
     use_wandb=False,
     scheduler=None,
 ):
+
     n_epochs = getattr(args, "n_epochs", 2)
     pbar = range(n_epochs)
     train_accs, test_accs = [], []
@@ -263,11 +262,13 @@ def train_single_model(
     elif isinstance(args, dict):
         args = argparse.Namespace(**get_flat_dict_from_nested(args))
 
+    spiking = True
+
     if use_tqdm:
         tqdm_f = tqdm_notebook if is_notebook() else tqdm
         pbar = tqdm_f(pbar, leave=None, position=0, desc="|")
     for epoch in pbar:
-        if epoch > 0:
+        if epoch > 0 and spiking:
             train_loss, train_acc = train(
                 model,
                 criterion,
@@ -294,7 +295,7 @@ def train_single_model(
             total_spikes == 0 and epoch > 0 and getattr(model, "model_type", "eventprop")
         ) == "eventprop":
             print("No spikes fired, stopping training")
-            break
+            spiking = False
 
         train_accs.append(train_acc)
         train_losses.append(train_loss)

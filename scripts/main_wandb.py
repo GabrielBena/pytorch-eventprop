@@ -11,10 +11,11 @@ from snntorch.functional.loss import (
     ce_rate_loss,
     ce_count_loss,
 )
+
 from torch.utils.data.dataset import ConcatDataset
 from torchvision import datasets, transforms
 from yingyang.dataset import YinYangDataset
-from eventprop.models import SNN, SpikeCELoss
+from eventprop.models import SNN, SpikeCELoss, FirstSpikeTime
 from eventprop.training import train_single_model
 from eventprop.config import get_flat_dict_from_nested
 
@@ -27,7 +28,9 @@ def main(args, use_wandb=False, **override_params):
     else:
         raise ValueError("Invalid type for run configuration, must be dict or Namespace")
 
-    config["device"] = config.get("device", torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    config["device"] = config.get(
+        "device", torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    )
 
     if use_wandb:
         if wandb.run is None:
@@ -39,6 +42,15 @@ def main(args, use_wandb=False, **override_params):
 
     print("Overriding config with:", override_params)
     config.update(override_params, allow_val_change=True)
+
+    if not "scale" in config or config["scale"] is None:
+        config["scale"] = [
+            [v_mu, v_sigma]
+            for v_mu, v_sigma in zip(
+                [v for k, v in config.items() if "mu" in k],
+                [v for k, v in config.items() if "sigma" in k],
+            )
+        ]
 
     # ------ Data ------
 
@@ -130,13 +142,16 @@ def main(args, use_wandb=False, **override_params):
     # )
 
     dims = [n_ins[config["dataset"]]]
+
     if config["n_hid"] is not None and isinstance(config["n_hid"], list):
         dims.extend(config["n_hid"])
     elif isinstance(config["n_hid"], int):
         dims.append(config["n_hid"])
+
     dims.append(n_outs[config["dataset"]])
 
     model = SNN(dims, **config).to(config["device"])
+
     if config.get("train_last_only", False):
         for n, layer in enumerate(model.layers):
             if n < len(model.layers) - 1:
@@ -145,9 +160,12 @@ def main(args, use_wandb=False, **override_params):
 
     # ------ Training ------
     optimizers_type = {"adam": torch.optim.Adam, "sgd": torch.optim.SGD}
-    optimizer = optimizers_type[config["optimizer"]](
-        model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"]
-    )
+    try:
+        optimizer = optimizers_type[config["optimizer"]](
+            model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"]
+        )
+    except ValueError:
+        optimizer = optimizers_type[config["optimizer"]](model.parameters(), config["lr"])
 
     if config.get("gamma", None) is not None:
         scheduler = torch.optim.lr_scheduler.StepLR(
@@ -161,12 +179,10 @@ def main(args, use_wandb=False, **override_params):
         if config["model_type"] == "snntorch":
             criterion = ce_temporal_loss()
         elif config["model_type"] == "eventprop":
-            criterion = SpikeCELoss(config["xi"])
+            criterion = SpikeCELoss(config["xi"], config["alpha"], config["beta"])
         else:
             raise ValueError("Invalid model type")
 
-    elif config["loss"] == "ce_both":
-        criterion = [ce_temporal_loss(), SpikeCELoss(config["xi"])]
     elif config["loss"] == "ce_rate":
         criterion = ce_rate_loss()
     elif config["loss"] == "ce_count":
@@ -174,8 +190,7 @@ def main(args, use_wandb=False, **override_params):
     else:
         raise ValueError("Invalid loss type")
 
-    # first_spike_fns = (SpikeTime().first_spike_fn, FirstSpikeTime.apply)
-    first_spike_fns = SpikeTime.FirstSpike.apply
+    first_spike_fn = FirstSpikeTime.apply
 
     args = argparse.Namespace(**config)
     train_results = train_single_model(
@@ -184,7 +199,7 @@ def main(args, use_wandb=False, **override_params):
         optimizer,
         loaders,
         args,
-        first_spike_fn=first_spike_fns,
+        first_spike_fn=first_spike_fn,
         use_wandb=use_wandb,
         scheduler=scheduler,
     )
@@ -196,18 +211,21 @@ if __name__ == "__main__":
 
     use_wandb = False
     file_dir = os.path.dirname(os.path.abspath(__file__))
-    sweep_id = "bf3ost8a"
+
+    sweep_id = "xwbxo1t9"
     use_best_params = True
+    best_params_to_use = {"loss", "optim", "model"}
+    # best_params_to_use = None
+
     # use_run_params = "seq6m529"
     use_run_params = None
 
     data_config = {
-        "seed": 4422,
-        # "seed": np.random.randint(10000),
+        "seed": np.random.randint(10000),
         "dataset": "ying_yang",
-        "subset_sizes": [5000, 1000],
+        "subset_sizes": [2000, 1000],
         "deterministic": True,
-        "batch_size": 32,
+        "batch_size": 20,
         "encoding": "latency",
         "T": 30,
         "dt": 1e-3,
@@ -230,7 +248,6 @@ if __name__ == "__main__":
     model_config = {
         "model_type": "eventprop",
         "snn": {
-            "T": data_config["T"],
             "dt": data_config["dt"],
             "tau_m": 20e-3,
             "tau_s": 5e-3,
@@ -238,11 +255,9 @@ if __name__ == "__main__":
         "weights": {
             "init_mode": "kaiming_both",
             "scale_0_mu": 3,
-            "scale_0_sigma": 1.5,
+            "scale_0_sigma": 3.5,
             "scale_1_mu": 5,
-            "scale_1_sigma": 2.5,
-            "mu": paper_params[data_config["dataset"]]["mu"],
-            "sigma": paper_params[data_config["dataset"]]["sigma"],
+            "scale_1_sigma": 0.5,
             "n_hid": 120,
             "resolve_silent": False,
             "dropout": 0.0,
@@ -251,32 +266,23 @@ if __name__ == "__main__":
         "device": torch.device("cpu"),
     }
 
-    if not "scale" in model_config["weights"]:
-        # model_config["weights"]["scale"] = [
-        #     v for k, v in model_config["weights"].items() if "scale" in k
-        # ]
-        model_config["weights"]["scale"] = [
-            [v_mu, v_sigma]
-            for v_mu, v_sigma in zip(
-                [v for k, v in model_config["weights"].items() if "mu" in k],
-                [v for k, v in model_config["weights"].items() if "sigma" in k],
-            )
-        ]
-
     training_config = {
-        "n_epochs": 60,
-        "loss": "ce_temporal",
-        "alpha": 3e-3,
-        "xi": 0.5,
-        "beta": 6.4,
-        "n_tests": 1,
+        "n_epochs": 30,
+        "n_tests": 3,
         "exclude_equal": False,
     }
 
+    loss_config = {
+        "loss": "ce_temporal",
+        "alpha": 0e-3,
+        "xi": 0.5,
+        "beta": 6.4,
+    }
+
     optim_config = {
-        "lr": 5e-3,
-        "weight_decay": 0.0,
         "optimizer": "adam",
+        "lr": 2e-3,
+        "weight_decay": 0.0,
         "gamma": 0.95,
     }
 
@@ -285,6 +291,7 @@ if __name__ == "__main__":
         "model": model_config,
         "training": training_config,
         "optim": optim_config,
+        "loss": loss_config,
     }
 
     flat_config = get_flat_dict_from_nested(config)
@@ -304,8 +311,16 @@ if __name__ == "__main__":
     else:
         best_params = {}
 
-    best_params.pop("seed")
-    best_params.pop("device")
+    if use_best_params and best_params_to_use is not None:
+        best_params = {
+            k: best_params[k]
+            for k in get_flat_dict_from_nested({k: config[k] for k in best_params_to_use})
+        }
+
+    if "seed" in best_params:
+        best_params.pop("seed")
+    if "device" in best_params:
+        best_params.pop("device")
 
     for test in range(training_config["n_tests"]):
         train_results = main(
@@ -317,12 +332,20 @@ if __name__ == "__main__":
         all_train_results.append(train_results)
         all_seeds.append(flat_config["seed"] + test)
 
-    all_test_accs = np.array(
-        [np.max(train_results["test_acc"][:]) for train_results in all_train_results]
-    )
-    all_test_losses = np.array(
-        [np.min(train_results["test_loss"][:]) for train_results in all_train_results]
-    )
+    try:
+
+        all_test_accs = np.array([train_results["test_acc"] for train_results in all_train_results])
+        all_test_losses = np.array(
+            [train_results["test_loss"] for train_results in all_train_results]
+        )
+
+    except ValueError:
+        all_test_accs = np.array(
+            [train_results["test_acc"] for train_results in all_train_results], dtype=object
+        )
+        all_test_losses = np.array(
+            [train_results["test_loss"] for train_results in all_train_results], dtype=object
+        )
 
     data = [
         [test_accs, test_losses, seed]
@@ -334,15 +357,22 @@ if __name__ == "__main__":
         wandb.log(
             {
                 "results_table": table,
-                "mean_test_acc": np.mean(all_test_accs),
-                "std_test_acc": np.std(all_test_accs),
-                "mean_test_loss": np.mean(all_test_losses),
-                "std_test_loss": np.std(all_test_losses),
+                "mean_test_acc": np.mean(all_test_accs[:, -1]),
+                "max_test_acc": np.mean(np.max(all_test_accs, axis=1)),
+                "max_last3_test_acc": np.mean(np.max(all_test_accs[:, -3:], axis=1)),
+                "std_last_test_acc": np.std(all_test_accs[:, -1]),
+                "last_test_loss": np.mean(all_test_losses[:, -1]),
+                "min_test_loss": np.mean(np.min(all_test_losses, axis=1)),
+                "min_last3_test_loss": np.mean(np.min(all_test_losses[:, -3:], axis=1)),
+                "std_last_test_loss": np.std(all_test_losses[:, -1]),
             }
         )
 
         wandb.run.finish()
 
     print(
-        f"Finished run, Mean test acc: {np.mean(all_test_accs)}, Mean test loss: {np.mean(all_test_losses)}"
+        str(
+            f"Finished run, Mean test acc: {np.mean(all_test_accs[:, -1])}"
+            + f"Mean test loss: {np.mean(all_test_losses)}"
+        )
     )

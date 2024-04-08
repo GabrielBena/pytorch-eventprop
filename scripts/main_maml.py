@@ -26,7 +26,7 @@ if __name__ == "__main__":
     ## Data and Config
 
     data_config = {
-        "seed": 42,
+        "seed": np.random.randint(0, 1000),
         "dataset": "ying_yang",
         "deterministic": True,
         "meta_batch_size": 10,
@@ -35,7 +35,6 @@ if __name__ == "__main__":
         "dt": 1e-3,
         "t_min": 0,
         "data_folder": "../../../data/",
-        "n_samples_per_task": 100,
         "dataset_size": 1000,
         "n_tasks_per_split": 64,
     }
@@ -80,16 +79,6 @@ if __name__ == "__main__":
         data_config=data_config,
         dataset_transform=dataset_split,
     )
-
-    # meta_train_dataset, meta_val_dataset, meta_test_dataset = [
-    #     ClassSplitter(
-    #         d,
-    #         num_train_per_class=data_config["n_samples_per_task"],
-    #         num_test_per_class=data_config["n_samples_per_task"],
-    #         shuffle=False,
-    #     )
-    #     for d in [meta_train_dataset, meta_val_dataset, meta_test_dataset]
-    # ]
 
     meta_train_dataloader = BatchMetaDataLoader(
         meta_train_dataset,
@@ -141,10 +130,6 @@ if __name__ == "__main__":
 
     training_config = {
         "num_epochs": 100,
-        "loss": "ce_temporal",
-        "alpha": 3e-3,
-        "xi": 0.5,
-        "beta": 6.4,
         "n_tests": 3,
         "exclude_equal": False,
         "do_train": True,
@@ -152,20 +137,19 @@ if __name__ == "__main__":
         "test_every": 3,
     }
 
-    ## Inner Loop Optim
-    optim_config = {
-        "lr": 5e-3,
-        "weight_decay": 0.0,
-        "optimizer": "adam",
-        "gamma": 0.95,
+    loss_config = {
+        "loss": "ce_temporal",
+        "alpha": 3e-3,
+        "xi": 0.5,
+        "beta": 6.4,
     }
 
     maml_config = {
         "num_shots": 100,
         "num_shots_test": 1000,
         "first_order": False,
-        "meta-lr": 1e-4,
-        "inner-lr": 100,
+        "meta-lr": 1e-3,  # adam
+        "inner-lr": 100,  # sgd
         "learn_step_size": False,
         "meta-gamma": 0.95,
     }
@@ -174,7 +158,6 @@ if __name__ == "__main__":
         "data": data_config,
         "model": model_config,
         "training": training_config,
-        "optim": optim_config,
         "maml": maml_config,
     }
 
@@ -215,7 +198,7 @@ if __name__ == "__main__":
     # -------- Main Training --------
     # -------------------------------
 
-    use_wandb = True
+    use_wandb = False
 
     if use_wandb:
         if wandb.run is None:
