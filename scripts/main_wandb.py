@@ -209,12 +209,12 @@ def main(args, use_wandb=False, **override_params):
 
 if __name__ == "__main__":
 
-    use_wandb = False
+    use_wandb = True
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
-    sweep_id = "xwbxo1t9"
+    sweep_id = "k4jl82he"
     use_best_params = True
-    best_params_to_use = {"loss", "optim", "model"}
+    best_params_to_use = {"optim", "model"}
     # best_params_to_use = None
 
     # use_run_params = "seq6m529"
@@ -223,13 +223,14 @@ if __name__ == "__main__":
     data_config = {
         "seed": np.random.randint(10000),
         "dataset": "ying_yang",
-        "subset_sizes": [2000, 1000],
+        "subset_sizes": [5000, 1000],
         "deterministic": True,
         "batch_size": 20,
         "encoding": "latency",
         "T": 30,
         "dt": 1e-3,
         "t_min": 2,
+        "t_max": 2,
         "data_folder": f"{file_dir}/../../data",
         "input_dropout": 0.0,
     }
@@ -268,14 +269,14 @@ if __name__ == "__main__":
 
     training_config = {
         "n_epochs": 30,
-        "n_tests": 3,
+        "n_tests": 4,
         "exclude_equal": False,
     }
 
     loss_config = {
         "loss": "ce_temporal",
-        "alpha": 0e-3,
-        "xi": 0.5,
+        "alpha": 0.0,
+        "xi": 1.0,
         "beta": 6.4,
     }
 

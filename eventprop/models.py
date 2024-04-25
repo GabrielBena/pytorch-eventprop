@@ -83,14 +83,14 @@ class SpikingLinear_ev(MetaModule):
 
         self.dropout_p = kwargs.get("dropout", None)
 
-        # self.alpha = np.exp(-self.dt / self.tau_s)
-        # self.beta = np.exp(-self.dt / self.tau_m)
+        # self.alpha = 1 - self.dt / self.tau_s
+        # self.beta = 1 - self.dt / self.tau_m
 
         self.alpha = np.exp(-self.dt / self.tau_s)
         self.beta = np.exp(-self.dt / self.tau_m)
 
         # print(
-        #     f"Creating Spiking Linear with {d1} -> {d2} with alpha {self.alpha} and beta {self.beta}"
+        #     f"Cr eating Spiking Linear with {d1} -> {d2} with alpha {self.alpha} and beta {self.beta}"
         # )
 
         self.weight = nn.Parameter(torch.Tensor(d2, d1))
@@ -132,6 +132,8 @@ class SpikingLinear_ev(MetaModule):
         # self.forward = lambda input: self.EventProp.apply(
         #     input, self.weight, self.manual_forward, self.manual_backward
         # )
+
+        self.bwd_dicts = []
 
     def forward(self, input, params=None):
         if params is not None:
@@ -291,7 +293,7 @@ class SpikingLinear_ev(MetaModule):
             "grad_input": grad_input,
             "grad_weight": grad_weight,
         }
-        self.bwd_dict = output_dict
+        self.bwd_dicts.append(output_dict)
 
         return grad_input.data, grad_weight.data, lV, lI
 
@@ -434,6 +436,10 @@ class SNN(nn.Module):
         if self.get_first_spikes:
             out = self.outact(out)
         return out, out_dict["recordings"]
+
+    def reset_recordings(self):
+        for l in self.layers:
+            l.bwd_dicts = []
 
 
 class SpikeCELoss(nn.Module):
