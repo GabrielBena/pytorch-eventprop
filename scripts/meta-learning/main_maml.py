@@ -34,6 +34,7 @@ if __name__ == "__main__":
         "T": 50,
         "dt": 1e-3,
         "t_min": 0,
+        "t_max": -2,
         "data_folder": "../../../data/",
         "dataset_size": 1000,
         "n_tasks_per_split": 64,
@@ -113,9 +114,6 @@ if __name__ == "__main__":
         "weights": {
             "init_mode": "kaiming_both",
             # "scale_0_mu": 3,
-            # "scale_0_sigma": 1.5,
-            # "scale_1_mu": 5,
-            # "scale_1_sigma": 2.5,
             "scale": 6,
             "n_hid": 120,
             "resolve_silent": False,
@@ -159,6 +157,7 @@ if __name__ == "__main__":
         "model": model_config,
         "training": training_config,
         "maml": maml_config,
+        "loss": loss_config,
     }
 
     config = get_flat_dict_from_nested(default_config)
