@@ -209,11 +209,11 @@ def main(args, use_wandb=False, **override_params):
 
 if __name__ == "__main__":
 
-    use_wandb = True
+    use_wandb = False
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
     sweep_id = "k4jl82he"
-    use_best_params = True
+    use_best_params = False
     best_params_to_use = {"optim", "model"}
     # best_params_to_use = None
 
@@ -247,7 +247,7 @@ if __name__ == "__main__":
     }
 
     model_config = {
-        "model_type": "eventprop",
+        "model_type": "snntorch",
         "snn": {
             "dt": data_config["dt"],
             "tau_m": 20e-3,

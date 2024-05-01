@@ -5,8 +5,7 @@ import torch.nn.functional as F
 from torch.autograd import Function
 import numpy as np
 import snntorch as snn
-from snntorch import utils
-from snntorch.functional import SpikeTime
+from snntorch.functional.loss import SpikeTime
 from collections import OrderedDict
 
 try:
@@ -329,6 +328,8 @@ class SpikingLinear_su(nn.Module):
             self.weight = nn.Parameter(torch.Tensor(self.output_dim, self.input_dim))
             nn.init.kaiming_normal_(self.weight)
             self.weight.data *= self.mu
+
+        device = input.device
 
         if self.input_dropout_p:
             input = self.input_dropout(input)

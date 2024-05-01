@@ -141,7 +141,10 @@ def train(
             [s.retain_grad() for s in spk_times]
             loss = sum(losses)
         else:
-            loss = criterion(output, target)[0]
+            try:
+                loss = criterion(output, target)[0]
+            except IndexError:
+                loss = criterion(output, target)
 
         accuracy, correct = compute_accuracy(
             first_spikes.cpu().detach().numpy(),
@@ -205,7 +208,10 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
                 losses = [c(o, target)[0] for o, c in zip(outputs, criterion)]
                 loss = losses[0][1]
             else:
-                loss = criterion(output, target)[1]
+                try:
+                    loss = criterion(output, target)[1]
+                except IndexError:
+                    loss = criterion(output, target)
 
             total_loss += loss
 
