@@ -43,15 +43,6 @@ def main(args, use_wandb=False, **override_params):
     print("Overriding config with:", override_params)
     config.update(override_params, allow_val_change=True)
 
-    if not "scale" in config or config["scale"] is None:
-        config["scale"] = [
-            [v_mu, v_sigma]
-            for v_mu, v_sigma in zip(
-                [v for k, v in config.items() if "mu" in k],
-                [v for k, v in config.items() if "sigma" in k],
-            )
-        ]
-
     # ------ Data ------
 
     config["dataset"] = config["dataset"]
