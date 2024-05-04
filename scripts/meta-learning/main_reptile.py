@@ -7,13 +7,14 @@ import torch
 from collections import OrderedDict
 
 import random
-from tqdm.notebook import tqdm
+
+from tqdm import tqdm
+
+# from tqdm.notebook import tqdm as tqdm_n
 import pandas as pd
 import seaborn as sns
 import argparse
 from torchviz import make_dot
-from tqdm.notebook import tqdm, trange
-from tqdm.notebook import trange
 
 from yingyang.meta_dataset import get_all_datasets
 from torchmeta.transforms import ClassSplitter
@@ -32,7 +33,7 @@ if __name__ == "__main__":
         "seed": 42,
         "dataset": "ying_yang",
         "deterministic": True,
-        "meta_batch_size": 10,
+        "meta_batch_size": 1,
         "encoding": "latency",
         "T": 50,
         "dt": 1e-3,
@@ -113,7 +114,7 @@ if __name__ == "__main__":
 
     optim_config = {
         "meta-lr": 1e-2,
-        "inner-lr": 1e-2,
+        "inner-lr": 1e-1,
         "optimizer": "adam",
         "gamma": 0.95,
     }
@@ -148,6 +149,7 @@ if __name__ == "__main__":
     from eventprop.training import REPTILE
 
     reptile_trainer = REPTILE(model, default_config)
+
     train_accs = {
         "pre": [],
         "post": [],
@@ -167,32 +169,43 @@ if __name__ == "__main__":
     if use_wandb:
         wandb.init(project="ying_yang_reptile", config=config)
 
-    for ep in trange(100, position=0, desc="Epochs"):
-
+    n_batchs = len(meta_train_dataloader)
+    for ep in tqdm(range(100), position=0, desc="Epochs", leave=False):
         for trial, accs in all_accs.items():
-            for acc in accs.values():
-                acc.append([])
+            accs["pre"].append([])
+            accs["post"].append([])
 
-        for training_batch in meta_train_dataloader:
+        pbar = tqdm(meta_train_dataloader, position=1, desc="Meta-Batches", leave=False)
+        for training_batch in pbar:
             outer_loss, results = reptile_trainer.get_outer_loss(
                 training_batch, use_tqdm=True, train=True, position=1
             )
-            train_accs["pre"][-1].append([results["meta_accs"]["pre"]])
-            train_accs["post"][-1].append([results["meta_accs"]["post"]])
+            train_accs["pre"][-1].extend(results["meta_accs"]["pre"])
+            train_accs["post"][-1].extend(results["meta_accs"]["post"])
+            desc = (
+                f"Train Acc: {np.mean(train_accs['pre'][-1])} -> {np.mean(train_accs['post'][-1])}"
+            )
+
+            pbar.set_description(desc)
+            if use_wandb:
+                wandb.log(
+                    {
+                        "pre_train_accs": train_accs["pre"][-1][-1],
+                        "post_train_accs": train_accs["post"][-1][-1],
+                    }
+                )
 
         for testing_batch in meta_test_dataloader:
             outer_loss, results = reptile_trainer.get_outer_loss(
                 testing_batch, use_tqdm=False, train=False
             )
-            test_accs["pre"][-1].append([results["meta_accs"]["pre"]])
-            test_accs["post"][-1].append([results["meta_accs"]["post"]])
+            test_accs["pre"][-1].extend(results["meta_accs"]["pre"])
+            test_accs["post"][-1].extend(results["meta_accs"]["post"])
 
-        if use_wandb:
-            wandb.log(
-                {
-                    "pre_train_accs": train_accs["pre"][-1],
-                    "post_train_accs": train_accs["post"][-1],
-                    "pre_test_accs": test_accs["pre"][-1],
-                    "post_test_accs": test_accs["post"][-1],
-                }
-            )
+            if use_wandb:
+                wandb.log(
+                    {
+                        "pre_test_accs": test_accs["pre"][-1][-1],
+                        "post_test_accs": test_accs["post"][-1][-1],
+                    }
+                )

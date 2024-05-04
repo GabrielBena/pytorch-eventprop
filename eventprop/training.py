@@ -388,12 +388,12 @@ class REPTILE(object):
         )
 
         if use_tqdm:
-            if is_notebook:
+            if is_notebook():
                 pbar = tqdm_notebook(
-                    range(n_shots), desc="Adaptation: ", position=position, leave=False
+                    range(n_shots), desc="Adaptation: ", position=position, leave=None
                 )
             else:
-                pbar = tqdm(range(n_shots), desc="Adaptation: ", position=position, leave=False)
+                pbar = tqdm(range(n_shots), desc="Adaptation: ", position=position, leave=None)
         else:
             pbar = range(n_shots)
 
@@ -427,16 +427,8 @@ class REPTILE(object):
         outer_loss = 0
 
         adapted_params = {}
-        n_tasks = len(meta_batch["train"][0])
-        if use_tqdm:
-            if is_notebook():
-                pbar = tqdm_notebook(range(n_tasks), desc="Task: ", position=position, leave=False)
-            else:
-                pbar = tqdm(range(n_tasks), desc="Task: ", position=position, leave=False)
-        else:
-            pbar = range(n_tasks)
 
-        for task, (*train_meta_sample, _) in enumerate(zip(*meta_batch["train"], pbar)):
+        for task, train_meta_sample in enumerate(zip(*meta_batch["train"])):
 
             # create checkpoint
             start_weights = deepcopy(self.model.state_dict())
@@ -482,10 +474,6 @@ class REPTILE(object):
             else:
                 # return to checkpoint
                 self.model.load_state_dict(start_weights)
-
-            if use_tqdm:
-                pbar.set_description(f"Task: {task}, Pre: {pre_acc:.2f}, Post: {post_acc:.2f}")
-
         return outer_loss, {
             "meta_accs": meta_accs,
             "meta_losses": meta_losses,
