@@ -15,7 +15,7 @@ from snntorch.functional.loss import (
 from torch.utils.data.dataset import ConcatDataset
 from torchvision import datasets, transforms
 from yingyang.dataset import YinYangDataset
-from eventprop.models import SNN, SpikeCELoss, FirstSpikeTime
+from eventprop.models import SNN, SpikeCELoss, FirstSpikeTime, SpikeQuadLoss
 from eventprop.training import train_single_model
 from eventprop.config import get_flat_dict_from_nested
 
@@ -153,7 +153,10 @@ def main(args, use_wandb=False, **override_params):
     optimizers_type = {"adam": torch.optim.Adam, "sgd": torch.optim.SGD}
     try:
         optimizer = optimizers_type[config["optimizer"]](
-            model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"]
+            model.parameters(),
+            lr=config["lr"],
+            weight_decay=config["weight_decay"],
+            betas=(config["beta_1"], config["beta_2"]),
         )
     except ValueError:
         optimizer = optimizers_type[config["optimizer"]](model.parameters(), config["lr"])
@@ -173,6 +176,8 @@ def main(args, use_wandb=False, **override_params):
             criterion = SpikeCELoss(config["xi"], config["alpha"], config["beta"])
         else:
             raise ValueError("Invalid model type")
+    elif config["loss"] == "quadratic":
+        criterion = SpikeQuadLoss(config["xi"], config["alpha"], config["beta"])
 
     elif config["loss"] == "ce_rate":
         criterion = ce_rate_loss()
@@ -200,23 +205,21 @@ def main(args, use_wandb=False, **override_params):
 
 if __name__ == "__main__":
 
-    use_wandb = False
+    use_wandb = True
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
     sweep_id = "k4jl82he"
     use_best_params = False
     best_params_to_use = {"optim", "model"}
     # best_params_to_use = None
-
-    # use_run_params = "seq6m529"
-    use_run_params = None
+    use_run_params = False
 
     data_config = {
         "seed": np.random.randint(10000),
         "dataset": "ying_yang",
-        "subset_sizes": [5000, 1000],
+        "subset_sizes": [100, 1000],
         "deterministic": True,
-        "batch_size": 20,
+        "batch_size": 1,
         "encoding": "latency",
         "T": 30,
         "dt": 1e-3,
@@ -238,7 +241,7 @@ if __name__ == "__main__":
     }
 
     model_config = {
-        "model_type": "snntorch",
+        "model_type": "eventprop",
         "snn": {
             "dt": data_config["dt"],
             "tau_m": 20e-3,
@@ -249,22 +252,22 @@ if __name__ == "__main__":
             "scale_0_mu": 3,
             "scale_0_sigma": 3.5,
             "scale_1_mu": 5,
-            "scale_1_sigma": 0.5,
+            "scale_1_sigma": 2.5,
             "n_hid": 120,
             "resolve_silent": False,
             "dropout": 0.0,
         },
-        # "device": (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")),
         "device": torch.device("cpu"),
     }
 
     training_config = {
-        "n_epochs": 30,
-        "n_tests": 4,
+        "n_epochs": 2,
+        "n_tests": 25,
         "exclude_equal": False,
     }
 
     loss_config = {
+        # "loss": "quadratic",
         "loss": "ce_temporal",
         "alpha": 0.0,
         "xi": 1.0,
@@ -273,9 +276,11 @@ if __name__ == "__main__":
 
     optim_config = {
         "optimizer": "adam",
-        "lr": 2e-3,
+        "lr": 1e-2,
         "weight_decay": 0.0,
         "gamma": 0.95,
+        "beta_1": 0.9,
+        "beta_2": 0.99,
     }
 
     config = {

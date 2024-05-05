@@ -406,15 +406,21 @@ class SpikeCELoss(nn.Module):
         return reg_loss, loss, first_spikes
 
 
+def softargmin1d(input, beta=10):
+    *_, n = input.shape
+    input = nn.functional.softmin(beta * input, dim=-1)
+    indices = torch.linspace(0, 1, n)
+    result = torch.sum((n - 1) * input * indices, dim=-1)
+    return result
+
+
 class SpikeQuadLoss(nn.Module):
     def __init__(self, xi=1, alpha=0.0, beta=6.4):
         super().__init__()
         self.spike_time_fn = FirstSpikeTime.apply
-        # self.spike_time_fn = SpikeTime().first_spike_fn
         self.xi = xi
         self.alpha = alpha
         self.beta = beta
-        # self.celoss = nn.CrossEntropyLoss(reduction="mean")
         self.quadloss = nn.MSELoss(reduction="mean")
 
     def forward(self, input, target):
@@ -422,7 +428,8 @@ class SpikeQuadLoss(nn.Module):
             target = target.unsqueeze(0)
         first_spikes = self.spike_time_fn(input)
         # loss = self.celoss(-first_spikes / (self.xi), target)
-        loss = self.quadloss(first_spikes, target.float())
+        soft_arg_spikes = softargmin1d(first_spikes)
+        loss = self.quadloss(soft_arg_spikes, target.float())
 
         if self.alpha != 0:
             target_first_spike_times = first_spikes.gather(1, target.view(-1, 1))
@@ -467,6 +474,8 @@ class SNN(nn.Module):
         self.layer_type = all_kwargs.get("layer_type", None)
         self.model_type = all_kwargs.get("model_type", None)
 
+        self.free_recordings = all_kwargs.get("free_recordings", True)
+
         assert not (
             self.layer_type is None and self.model_type is None
         ), "Must specify layer_type or model_type"
@@ -490,7 +499,6 @@ class SNN(nn.Module):
             ]
 
         self.scale = all_kwargs.get("scale")
-        print("SNN SCALE : ", self.scale)
 
         layers = []
         if all_kwargs.get("seed", None) is not None:
@@ -524,6 +532,9 @@ class SNN(nn.Module):
         return super().to(device)
 
     def forward(self, input, params=None):
+
+        if self.free_recordings:
+            self.reset_recordings()
         if not self.eventprop:
             input = input.float()
             reset(self)

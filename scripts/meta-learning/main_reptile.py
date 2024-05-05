@@ -22,6 +22,8 @@ from torchmeta.transforms import ClassSplitter
 from eventprop.config import get_flat_dict_from_nested
 from eventprop.training import encode_data
 from eventprop.models import SNN
+from eventprop.meta import REPTILE
+import tracemalloc
 
 import wandb
 
@@ -92,7 +94,7 @@ if __name__ == "__main__":
         "weights": {
             "init_mode": "kaiming_both",
             "scale_0_mu": 5,
-            "scale_0_sigma": 3.5,
+            "scale_0_sigma": 2.5,
             "scale_1_mu": 5,
             "scale_1_sigma": 0.5,
             "n_hid": 120,
@@ -113,15 +115,15 @@ if __name__ == "__main__":
     }
 
     optim_config = {
-        "meta-lr": 1e-2,
-        "inner-lr": 1e-1,
+        "meta-lr": 1e-3,
+        "inner-lr": 1e-2,
         "optimizer": "adam",
         "gamma": 0.95,
     }
 
     meta_config = {
-        "n_epochs": 20,
-        "num_shots": 10,
+        "n_epochs": 100,
+        "num_shots": 100,
         "n_samples_test": 1000,
         "first_order": True,
         "learn_step_size": False,
@@ -146,7 +148,6 @@ if __name__ == "__main__":
     model = SNN(dims, **config).to(config["device"])
     init_params = OrderedDict(model.meta_named_parameters()).copy()
     ## REPTILE
-    from eventprop.training import REPTILE
 
     reptile_trainer = REPTILE(model, default_config)
 
@@ -166,17 +167,23 @@ if __name__ == "__main__":
     }
 
     use_wandb = True
+    trace_mem = False
     if use_wandb:
         wandb.init(project="ying_yang_reptile", config=config)
 
+    if trace_mem:
+
+        tracemalloc.start()
+
     n_batchs = len(meta_train_dataloader)
-    for ep in tqdm(range(100), position=0, desc="Epochs", leave=False):
+    for ep in tqdm(range(meta_config["n_epochs"]), position=0, desc="Epochs", leave=False):
         for trial, accs in all_accs.items():
             accs["pre"].append([])
             accs["post"].append([])
 
         pbar = tqdm(meta_train_dataloader, position=1, desc="Meta-Batches", leave=False)
         for training_batch in pbar:
+
             outer_loss, results = reptile_trainer.get_outer_loss(
                 training_batch, use_tqdm=True, train=True, position=1
             )
@@ -209,3 +216,18 @@ if __name__ == "__main__":
                         "post_test_accs": test_accs["post"][-1][-1],
                     }
                 )
+
+        torch.save(model.state_dict(), "reptile_model")
+
+    if trace_mem:
+        current, peak = tracemalloc.get_traced_memory()
+        print(f"Current memory usage is {current / 10**6}MB; Peak was {peak / 10**6}MB")
+        snapshot = tracemalloc.take_snapshot()
+        top_stats = snapshot.statistics("lineno")
+
+        print("[ Top 10 ]")
+        for stat in top_stats[:10]:
+            print(stat)
+
+        print("Done")
+        tracemalloc.stop()
