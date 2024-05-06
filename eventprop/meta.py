@@ -10,18 +10,11 @@ from tqdm.notebook import tqdm as tqdm_notebook
 
 class REPTILE(object):
 
-    def __init__(self, model, default_config) -> None:
+    def __init__(self, model, flat_config) -> None:
 
         self.model = model
-        self.default_config = default_config
-        self.flat_config = get_flat_dict_from_nested(default_config)
+        self.flat_config = flat_config
         self.args = argparse.Namespace(**self.flat_config)
-
-        self.meta_optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr=self.flat_config["meta-lr"],
-            weight_decay=self.flat_config.get("meta-weight_decay", 0),
-        )
 
         self.inner_loss_fn = SpikeCELoss(
             alpha=self.flat_config["alpha"],
@@ -35,7 +28,7 @@ class REPTILE(object):
             self.flat_config["n_tasks_per_split_train"] * self.flat_config["n_epochs"]
         )
 
-    def adapt(self, meta_sample, use_tqdm=False, position=0):
+    def adapt(self, meta_sample, use_tqdm=False, position=0, shuffle=True):
 
         inputs, targets = meta_sample
         inputs, targets = inputs.to(self.args.device), targets.to(self.args.device)
@@ -44,8 +37,12 @@ class REPTILE(object):
         if getattr(self, "inner_optimizer", None) is None:
             inner_optimizer = torch.optim.Adam(
                 dict(self.model.meta_named_parameters()).values(),
-                lr=self.flat_config["inner-lr"],
+                lr=self.flat_config["lr"],
                 weight_decay=self.flat_config.get("weight_decay", 0),
+                betas=(
+                    self.flat_config.get("beta_1", 0.9),
+                    self.flat_config.get("beta_2", 0.999),
+                ),
             )
         # use the same optimizer
         else:
@@ -56,6 +53,11 @@ class REPTILE(object):
             if self.flat_config["num_shots"] is None
             else self.flat_config["num_shots"]
         )
+
+        if shuffle:
+            shuffled_idxs = torch.randperm(inputs.size(0))
+            inputs = inputs[shuffled_idxs]
+            targets = targets[shuffled_idxs]
 
         if use_tqdm:
             if is_notebook():
@@ -130,8 +132,13 @@ class REPTILE(object):
 
             if train:
 
-                # annealed learning rate
-                alpha = self.flat_config["meta-lr"] * (1 - self.outer_iter / self.total_outer_iter)
+                if self.flat_config["annealing"] == "linear":
+                    # annealed learning rate
+                    alpha = self.flat_config["step_size"] * (
+                        1 - self.outer_iter / self.total_outer_iter
+                    )
+                else:
+                    raise NotImplementedError("Annealing strategy not implemented")
 
                 # update the model weights
                 updated_params = {
@@ -146,6 +153,7 @@ class REPTILE(object):
             else:
                 # return to checkpoint
                 self.model.load_state_dict(start_weights)
+
         return outer_loss, {
             "meta_accs": meta_accs,
             "meta_losses": meta_losses,

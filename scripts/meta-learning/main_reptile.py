@@ -37,13 +37,13 @@ if __name__ == "__main__":
         "deterministic": True,
         "meta_batch_size": 1,
         "encoding": "latency",
-        "T": 50,
+        "T": 30,
         "dt": 1e-3,
         "t_min": 0,
         "t_max": 2,
         "data_folder": "../../../data/",
         "n_samples_per_task": 100,  # adaptation steps
-        "n_tasks_per_split_train": 20,  # number of rotations
+        "n_tasks_per_split_train": 50,  # number of rotations
         "n_tasks_per_split_test": 20,  # number of rotations
         "n_tasks_per_split_val": 20,  # number of rotations
         "dataset_size": 1000,  # testing size
@@ -107,6 +107,7 @@ if __name__ == "__main__":
 
     n_ins = {"mnist": 784, "ying_yang": 5 if data_config["encoding"] == "latency" else 4}
     n_outs = {"mnist": 10, "ying_yang": 3}
+
     loss_config = {
         "loss": "ce_temporal",
         "alpha": 3e-3,
@@ -114,12 +115,16 @@ if __name__ == "__main__":
         "beta": 6.4,
     }
 
-    optim_config = {
-        "meta-lr": 1e-3,
-        "inner-lr": 1e-2,
+    inner_optim_config = {
         "optimizer": "adam",
+        "lr": 1e-2,
+        "weight_decay": 0.0,
         "gamma": 0.95,
+        "beta_1": 0.9,
+        "beta_2": 0.99,
     }
+
+    outer_optim_config = {"step_size": 3e-3, "annealing": "linear"}
 
     meta_config = {
         "n_epochs": 100,
@@ -132,24 +137,60 @@ if __name__ == "__main__":
     default_config = {
         "data": data_config,
         "model": model_config,
-        "optim": optim_config,
+        "inner_optim": inner_optim_config,
+        "outer_optim": outer_optim_config,
         "meta": meta_config,
         "loss": loss_config,
     }
-    config = get_flat_dict_from_nested(default_config)
+
+    flat_config = get_flat_dict_from_nested(default_config)
+
+    dims = [n_ins[flat_config["dataset"]]]
+    if flat_config["n_hid"] is not None and isinstance(flat_config["n_hid"], list):
+        dims.extend(flat_config["n_hid"])
+    elif isinstance(flat_config["n_hid"], int):
+        dims.append(flat_config["n_hid"])
+    dims.append(n_outs[flat_config["dataset"]])
+
+    use_wandb = False
+    use_best_sweep_params = True
+    sweep_id = "804krio6"
+    best_params_to_use = {"inner_optim", "model", "loss"}
+
+    if use_best_sweep_params:
+        api = wandb.Api()
+        sweep_path = f"m2snn/eventprop/{sweep_id}"
+        sweep = api.sweep(sweep_path)
+        best_run = sweep.best_run()
+        best_params = best_run.config
+
+    if use_best_sweep_params and best_params_to_use is not None:
+        best_params = {
+            k: best_params[k]
+            for k in get_flat_dict_from_nested({k: default_config[k] for k in best_params_to_use})
+        }
+
+    if "seed" in best_params:
+        best_params.pop("seed")
+    if "device" in best_params:
+        best_params.pop("device")
+
+    if use_wandb:
+        wandb.init(project="ying_yang_reptile", config=flat_config)
+        config = wandb.config
+    else:
+        config = flat_config
+
+    print("Overriding config with:", best_params)
+    config.update(best_params, allow_val_change=True)
+
     args = argparse.Namespace(**config)
-    dims = [n_ins[config["dataset"]]]
-    if config["n_hid"] is not None and isinstance(config["n_hid"], list):
-        dims.extend(config["n_hid"])
-    elif isinstance(config["n_hid"], int):
-        dims.append(config["n_hid"])
-    dims.append(n_outs[config["dataset"]])
 
     model = SNN(dims, **config).to(config["device"])
     init_params = OrderedDict(model.meta_named_parameters()).copy()
     ## REPTILE
 
-    reptile_trainer = REPTILE(model, default_config)
+    reptile_trainer = REPTILE(model, config)
 
     train_accs = {
         "pre": [],
@@ -166,17 +207,15 @@ if __name__ == "__main__":
         "test": test_accs,
     }
 
-    use_wandb = True
     trace_mem = False
-    if use_wandb:
-        wandb.init(project="ying_yang_reptile", config=config)
 
     if trace_mem:
 
         tracemalloc.start()
 
     n_batchs = len(meta_train_dataloader)
-    for ep in tqdm(range(meta_config["n_epochs"]), position=0, desc="Epochs", leave=False):
+    ep_pbar = tqdm(range(meta_config["n_epochs"]), position=0, desc="Epochs", leave=False)
+    for ep in ep_pbar:
         for trial, accs in all_accs.items():
             accs["pre"].append([])
             accs["post"].append([])
@@ -216,6 +255,15 @@ if __name__ == "__main__":
                         "post_test_accs": test_accs["post"][-1][-1],
                     }
                 )
+
+        mean_test_accs = {
+            "pre": np.mean(test_accs["pre"][-1]),
+            "post": np.mean(test_accs["post"][-1]),
+        }
+
+        ep_pbar.set_description(
+            f"Epochs: Mean Test Acc {mean_test_accs['pre']} -> {mean_test_accs['post']}"
+        )
 
         torch.save(model.state_dict(), "reptile_model")
 
