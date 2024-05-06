@@ -6,6 +6,7 @@ import argparse
 from copy import deepcopy
 from tqdm import tqdm
 from tqdm.notebook import tqdm as tqdm_notebook
+import torchopt
 
 
 class REPTILE(object):
@@ -28,15 +29,18 @@ class REPTILE(object):
             self.flat_config["n_tasks_per_split_train"] * self.flat_config["n_epochs"]
         )
 
-    def adapt(self, meta_sample, use_tqdm=False, position=0, shuffle=True):
+    def adapt(self, meta_sample, use_tqdm=False, position=0, shuffle=True, inner_params=None):
 
         inputs, targets = meta_sample
         inputs, targets = inputs.to(self.args.device), targets.to(self.args.device)
 
+        if inner_params is None:
+            inner_params = dict(self.model.named_parameters())
+
         # start optim from scratch
         if getattr(self, "inner_optimizer", None) is None:
-            inner_optimizer = torch.optim.Adam(
-                dict(self.model.meta_named_parameters()).values(),
+            inner_optimizer = torchopt.Adam(
+                inner_params.values(),
                 lr=self.flat_config["lr"],
                 weight_decay=self.flat_config.get("weight_decay", 0),
                 betas=(
@@ -75,11 +79,13 @@ class REPTILE(object):
             targets,
             pbar,
         ):
-            out_spikes, recordings = self.model(input)
+            out_spikes, recordings = self.model(input, params=inner_params)
             loss = self.inner_loss_fn(out_spikes, target)[0]
             inner_optimizer.zero_grad()
             loss.backward()
             inner_optimizer.step()
+
+        return inner_params
 
     def inner_test(self, meta_sample, params=None):
 
@@ -98,30 +104,27 @@ class REPTILE(object):
 
         outer_loss = 0
 
-        adapted_params = {}
-
-        self.model.reset_recordings()
+        adapted_params = []
 
         for task, train_meta_sample in enumerate(zip(*meta_batch["train"])):
 
             # create checkpoint
-            start_weights = deepcopy(self.model.state_dict())
+            checkpoint = deepcopy(dict(self.model.named_parameters()))
 
             # test before adapt
             test_meta_sample = [s[task] for s in meta_batch["test"]]
-            pre_acc, pre_loss, _ = self.inner_test(test_meta_sample, params=start_weights)
+            pre_acc, pre_loss, _ = self.inner_test(test_meta_sample, params=checkpoint)
             pre_acc = pre_acc.detach().cpu().numpy()
             meta_accs["pre"].append(pre_acc)
             meta_losses["pre"].append(pre_loss)
 
             # adapt
-            self.adapt(
+            candidate_weights = self.adapt(
                 train_meta_sample,
                 use_tqdm=use_tqdm and train and not is_notebook() and False,
                 position=position + 1,
+                inner_params=None,
             )
-            # new weights after adaptation
-            candidate_weights = self.model.state_dict()
 
             # test after adapt, using the adapted weights
             post_acc, post_loss, _ = self.inner_test(test_meta_sample, params=candidate_weights)
@@ -137,19 +140,22 @@ class REPTILE(object):
                     alpha = self.flat_config["step_size"] * (
                         1 - self.outer_iter / self.total_outer_iter
                     )
+                    print(alpha)
                 else:
                     raise NotImplementedError("Annealing strategy not implemented")
 
                 # update the model weights
                 updated_params = {
                     candidate: (
-                        start_weights[candidate]
-                        + alpha * (candidate_weights[candidate] - start_weights[candidate])
+                        checkpoint[candidate]
+                        + alpha * (candidate_weights[candidate] - checkpoint[candidate])
                     )
                     for candidate in candidate_weights
                 }
                 self.model.load_state_dict(updated_params)
                 self.outer_iter += 1
+                adapted_params.append(candidate_weights)
+
             else:
                 # return to checkpoint
                 self.model.load_state_dict(start_weights)

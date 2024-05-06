@@ -205,7 +205,7 @@ def main(args, use_wandb=False, **override_params):
 
 if __name__ == "__main__":
 
-    use_wandb = True
+    use_wandb = False
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
     sweep_id = "k4jl82he"
@@ -261,7 +261,7 @@ if __name__ == "__main__":
     }
 
     training_config = {
-        "n_epochs": 2,
+        "n_epochs": 3,
         "n_tests": 25,
         "exclude_equal": False,
     }

@@ -143,19 +143,31 @@ class SpikingLinear_ev(MetaModule):
 
     @staticmethod
     class EventProp(Function):
+
         @staticmethod
-        def forward(ctx, input, weights, manual_forward, manual_backward):
+        def forward(input, weights, manual_forward, manual_backward):
+            output, pack, fwd_dict = manual_forward(input, weights)
+            return output, fwd_dict, pack
+
+        @staticmethod
+        def setup_context(
+            ctx: torch.Any, inputs: torch.Tuple[torch.Any], outputs: torch.Any
+        ) -> torch.Any:
+
+            input, weights, manual_forward, manual_backward = inputs
+            *_, pack = outputs
+
             ctx.backward = manual_backward
             ctx.weights = weights
-            output, pack, fwd_dict = manual_forward(input, weights)
             ctx.save_for_backward(*pack)
-            return output, fwd_dict
 
         @staticmethod
         def backward(ctx, *grad_output):
+
             backward = ctx.backward
             pack = ctx.saved_tensors
             weights = ctx.weights
+
             grad_input, grad_weights, lV, lI = backward(grad_output[0], pack, weights)
             bwd_dict = {
                 "grad_input": grad_input,
@@ -380,7 +392,7 @@ model_types = {
 
 
 class SpikeCELoss(nn.Module):
-    def __init__(self, xi=1, alpha=0.0, beta=6.4):
+    def __init__(self, xi=1, alpha=0.0, beta=6.4, **kwargs):
         super().__init__()
         self.spike_time_fn = FirstSpikeTime.apply
         # self.spike_time_fn = SpikeTime().first_spike_fn
