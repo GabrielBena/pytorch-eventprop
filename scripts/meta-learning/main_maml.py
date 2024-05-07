@@ -22,8 +22,16 @@ from torchmeta.transforms import ClassSplitter
 from eventprop.config import get_flat_dict_from_nested
 from eventprop.training import encode_data
 from eventprop.models import SNN, SpikeCELoss
-from eventprop.meta import REPTILE
 import tracemalloc
+
+import os, sys
+from pathlib import Path
+from pathlib import Path
+
+path = Path(__file__).parent.absolute()
+# sys.path.append(Path.joinpath(path, "../../../torchopt"))
+
+import torchopt
 
 import wandb
 
@@ -189,75 +197,54 @@ if __name__ == "__main__":
     model = SNN(dims, **config).to(config["device"])
     loss_fn = SpikeCELoss(alpha=args.alpha, xi=args.xi, beta=args.beta)
     init_params = OrderedDict(model.meta_named_parameters()).copy()
-    ## iMAML
+    ## MAML
 
-    import torchopt
-    from torchopt.diff.implicit import ImplicitMetaGradientModule
-    from torchopt.visual import make_dot
+    import torch.optim as optim
 
-    class InnerNet(
-        ImplicitMetaGradientModule,
-        linear_solve=torchopt.linear_solve.solve_normal_cg(maxiter=5, atol=0),
-    ):
-        def __init__(self, meta_net, loss_fn, n_inner_iter, reg_param, optim_params):
-            super().__init__()
-            self.loss_fn = loss_fn
-            self.meta_net = meta_net
-            self.net = torchopt.module_clone(meta_net, by="deepcopy", detach_buffers=True)
-            self.n_inner_iter = n_inner_iter
-            self.reg_param = reg_param
-            self.reset_parameters()
-            self.optim_params = optim_params
-
-        def reset_parameters(self):
-            with torch.no_grad():
-                for p1, p2 in zip(self.parameters(), self.meta_parameters()):
-                    p1.data.copy_(p2.data)
-                    p1.detach_().requires_grad_()
-
-        def forward(self, x):
-            if len(x.shape) > 3:
-                x = x.transpose(0, 1).squeeze()
-            return self.net(x)
-
-        def objective(self, x, y):
-            # single sample processing
-            out, _ = self(x)
-            loss = self.loss_fn(out, y)[0]
-            regularization_loss = 0
-            for p1, p2 in zip(self.parameters(), self.meta_parameters()):
-                regularization_loss += 0.5 * self.reg_param * torch.sum(torch.square(p1 - p2))
-            return loss + regularization_loss
-
-        def solve(self, inputs, targets):
-            # Adaptation fn
-            params = tuple(self.parameters())
-            inner_optim = torchopt.Adam(params, lr=self.optim_params["lr"])
-            with torch.enable_grad():
-                # Temporarily enable gradient computation for conducting the optimization
-                for x, y, _ in zip(inputs, targets, range(self.n_inner_iter)):
-                    loss = self.objective(x, y)
-                    inner_optim.zero_grad()
-                    loss.backward(inputs=params)
-                    inner_optim.step()
-
-            return self
-
-    inner_net = InnerNet(
+    meta_opt = optim.Adam(model.parameters(), lr=1e-3)
+    inner_opt = torchopt.MetaAdam(
         model,
-        loss_fn,
-        n_inner_iter=1,
-        reg_param=0,
-        optim_params=inner_optim_config,
+        lr=inner_optim_config["lr"],
+        betas=[inner_optim_config["beta_1"], inner_optim_config["beta_2"]],
     )
 
-    training_batch = next(iter(meta_train_dataloader))
-    meta_sample_train, meta_sample_test = training_batch["train"], training_batch["test"]
-    meta_sample_train = [d[0] for d in meta_sample_train]
-    meta_sample_test = [d[0] for d in meta_sample_test]
-    optimal_inner_net = inner_net.solve(*meta_sample_train)
+    
 
-    out_spikes, _ = optimal_inner_net(meta_sample_test[0])
-    test_loss, _, first_spikes = loss_fn(out_spikes, meta_sample_test[1])
-    test_acc = (first_spikes.argmin(dim=-1) == meta_sample_test[1]).float().mean()
-    test_loss.backward()
+    def adapt(model, training_batch, n_inner_iter=1000):
+        # Adaptation fn
+        params = tuple(model.parameters())
+        meta_opt.zero_grad()
+
+        meta_sample_train, meta_sample_test = training_batch["train"], training_batch["test"]
+        meta_sample_train = [d[0][:100] for d in meta_sample_train]
+        meta_sample_test = [d[0][:100] for d in meta_sample_test]
+
+        # Temporarily enable gradient computation for conducting the optimization
+        for x, y, _ in zip(*meta_sample_train, range(n_inner_iter)):
+
+            out, _ = model(x)
+            loss, _, first_spikes = loss_fn(out, y)
+            inner_opt.step(loss)
+            acc = (first_spikes.argmin(-1) == y).float().mean()
+
+        out_spikes, _ = model(meta_sample_test[0])
+        loss, _, first_spikes = loss_fn(out_spikes, meta_sample_test[1])
+        acc = (first_spikes.argmin(-1) == meta_sample_test[1]).float().mean()
+
+        print(f"Post Acc is {acc}")
+
+        return acc, loss
+
+    training_batch = next(iter(meta_train_dataloader))
+
+    net_state_dict = torchopt.extract_state_dict(model, by="reference", detach_buffers=True)
+    optim_state_dict = torchopt.extract_state_dict(inner_opt, by="reference")
+
+    acc, loss = adapt(model, training_batch)
+
+    torchopt.recover_state_dict(model, net_state_dict)
+    torchopt.recover_state_dict(inner_opt, optim_state_dict)
+
+    loss.backward()
+    for n, p in model.named_parameters():
+        print(n, p.grad.any() if p.grad is not None else p.grad)

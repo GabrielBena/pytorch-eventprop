@@ -555,6 +555,9 @@ class SNN(nn.Module):
         if not self.eventprop:
             input = input.float()
             reset(self)
+        
+        if len(input.shape) > 3:
+            input = input.transpose(0, 1).squeeze()
         # out, all_recs = self.layers(input)
         out_dict = self.layers(input, params=params)
         out = out_dict["output"]
