@@ -208,8 +208,6 @@ if __name__ == "__main__":
         betas=[inner_optim_config["beta_1"], inner_optim_config["beta_2"]],
     )
 
-    
-
     def adapt(model, training_batch, n_inner_iter=1000):
         # Adaptation fn
         params = tuple(model.parameters())
