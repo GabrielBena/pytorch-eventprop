@@ -456,15 +456,20 @@ class SpikeQuadLoss(nn.Module):
 
 class FirstSpikeTime(Function):
     @staticmethod
-    def forward(ctx, input):
+    def forward(input):
         idx = (
             torch.arange(input.shape[0], 0, -1).unsqueeze(-1).unsqueeze(-1).float().to(input.device)
         )
         first_spike_times = torch.argmax(idx * input, dim=0).float()
-        ctx.save_for_backward(input, first_spike_times.clone())
         assert not (first_spike_times == input.shape[0]).any(), "Last ts is not a spike time"
         first_spike_times[first_spike_times == 0] = input.shape[0]
         return first_spike_times
+
+    @staticmethod
+    def setup_context(
+        ctx: torch.Any, inputs: torch.Tuple[torch.Any], output: torch.Any
+    ) -> torch.Any:
+        ctx.save_for_backward(*inputs, output.clone())
 
     @staticmethod
     def backward(ctx, grad_output):
