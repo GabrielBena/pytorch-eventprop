@@ -31,8 +31,6 @@ from pathlib import Path
 path = Path(__file__).parent.absolute()
 # sys.path.append(Path.joinpath(path, "../../../torchopt"))
 
-import torchopt
-
 import wandb
 
 ## Data and Config
@@ -132,10 +130,10 @@ if __name__ == "__main__":
         "beta_2": 0.99,
     }
 
-    outer_optim_config = outer_optim_config = {"meta_lr": 1e-3}
+    outer_optim_config = outer_optim_config = {"meta_lr": 1e-2, "meta_gamma": 0.95}
 
     meta_config = {
-        "n_epochs": 50,
+        "n_epochs": 100,
         "num_shots": 100,
         "n_samples_test": 1000,
         "first_order": True,

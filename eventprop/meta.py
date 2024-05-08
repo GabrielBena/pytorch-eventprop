@@ -184,6 +184,13 @@ class MAML(object):
 
         self.args = argparse.Namespace(**flat_config)
         self.meta_opt = torch.optim.Adam(model.parameters(), flat_config["meta_lr"])
+        if flat_config.get("meta_gamma", None) is not None:
+            self.meta_sch = torch.optim.lr_scheduler.ExponentialLR(
+                self.meta_opt, flat_config["meta_gamma"]
+            )
+        else:
+            self.meta_sch = None
+
         self.loss_fn = SpikeCELoss(**{k: flat_config[k] for k in ["alpha", "xi", "beta"]})
 
     def adapt(
@@ -275,7 +282,7 @@ class MAML(object):
             # pbar.set_description(
             #     f"Test Acc : { np.mean(test_accs["pre"][-n_tasks:]):2f} -> {np.mean(test_accs["post"][-n_tasks:]):2f}"
             #     )
-            pbar.set_posfix(
+            pbar.set_postfix(
                 {
                     "Test Acc Pre": np.mean(test_accs["pre"][-n_tasks:]),
                     "Test Acc Post": np.mean(test_accs["post"][-n_tasks:]),
@@ -305,15 +312,18 @@ def do_meta_training(meta_trainer, meta_train_loader, meta_test_loader, use_tqdm
     for epoch in pbar:
 
         for training_batch in tqdm(meta_train_loader, desc="Meta-Batches", leave=None, position=1):
-            outer_loss, train_results = meta_trainer.get_outer_loss(
+            train_outer_loss, train_results = meta_trainer.get_outer_loss(
                 training_batch,
                 train=True,
                 position=2,
             )
             all_train_results.append(train_results)
 
+        if meta_trainer.meta_sch:
+            meta_trainer.meta_sch.step()
+
         for testing_batch in meta_test_loader:
-            outer_loss, test_results = meta_trainer.get_outer_loss(
+            test_outer_loss, test_results = meta_trainer.get_outer_loss(
                 testing_batch, train=False, pbar=pbar
             )
 
@@ -327,23 +337,27 @@ def do_meta_training(meta_trainer, meta_train_loader, meta_test_loader, use_tqdm
         if use_wandb:
             wandb.log(
                 {
-                    "train_loss": outer_loss.cpu().data.item(),
+                    "train_loss": train_outer_loss.cpu().data.item(),
+                    "test_loss": test_outer_loss.cpu().data.item(),
                     "test_acc_pre": np.mean(
-                        [r[1]["pre"] for r in all_test_results[-len(meta_test_loader) :]]
+                        [np.mean(r[1]["pre"]) for r in all_test_results[-len(meta_test_loader) :]]
                     ),
                     "test_acc_post": np.mean(
-                        [r[1]["post"] for r in all_test_results[-len(meta_test_loader) :]]
+                        [np.mean(r[1]["post"]) for r in all_test_results[-len(meta_test_loader) :]]
                     ),
                     "train_acc_pre": np.mean(
-                        [r[1]["pre"] for r in all_train_results[-len(meta_train_loader) :]]
+                        [np.mean(r[1]["pre"]) for r in all_train_results[-len(meta_train_loader) :]]
                     ),
                     "train_acc_post": np.mean(
-                        [r[1]["post"] for r in all_train_results[-len(meta_train_loader) :]]
+                        [
+                            np.mean(r[1]["post"])
+                            for r in all_train_results[-len(meta_train_loader) :]
+                        ]
                     ),
                 }
             )
 
-    return meta_trainer
+    return meta_trainer, all_test_results, all_train_results
 
 
 def create_gif(meta_trainer, train_sample, test_sample, inner_opt=None):
@@ -359,8 +373,9 @@ def create_gif(meta_trainer, train_sample, test_sample, inner_opt=None):
     test_outs = meta_trainer.adapt(
         train_sample,
         inner_opt=inner_opt,
-        n_inner_iter=1000,
+        n_inner_iter=100,
         testing_sample=test_sample,
+        position=0,
     )
 
     path = Path("gif/imgs/")
@@ -373,7 +388,7 @@ def create_gif(meta_trainer, train_sample, test_sample, inner_opt=None):
             test_sample[0].argmax(0)[:, 1],
             c=F.softmin(test_out).cpu().data.numpy(),
         )
-        acc = (test_out == test_sample[1].squeeze()).float().mean()
+        acc = (test_out.argmin(-1) == test_sample[1].squeeze()).float().mean()
         plt.scatter(
             train_sample[0][i].argmax(0)[:, 0],
             train_sample[0][i].argmax(0)[:, 1],
