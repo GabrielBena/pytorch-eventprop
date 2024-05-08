@@ -475,8 +475,11 @@ class FirstSpikeTime(Function):
     def backward(ctx, grad_output):
         input, first_spike_times = ctx.saved_tensors
         k = (
-            F.one_hot(first_spike_times.long(), input.shape[0]).float().permute(2, 0, 1)
+            F.one_hot(first_spike_times.long().clip_(0, input.shape[0] - 1), input.shape[0])
+            .float()
+            .permute(2, 0, 1)
         )  # T x B x N
+        k[-1] = 0.0  # Last ts is not a spike time
         # print(grad_output.shape, grad_output)
         grad_input = k * grad_output.unsqueeze(0)
         return grad_input
@@ -555,7 +558,7 @@ class SNN(nn.Module):
         if not self.eventprop:
             input = input.float()
             reset(self)
-        
+
         if len(input.shape) > 3:
             input = input.transpose(0, 1).squeeze()
         # out, all_recs = self.layers(input)

@@ -22,7 +22,7 @@ from torchmeta.transforms import ClassSplitter
 from eventprop.config import get_flat_dict_from_nested
 from eventprop.training import encode_data
 from eventprop.models import SNN, SpikeCELoss
-import tracemalloc
+from eventprop.meta import MAML, do_meta_training
 
 import os, sys
 from pathlib import Path
@@ -43,7 +43,7 @@ if __name__ == "__main__":
         "seed": 42,
         "dataset": "ying_yang",
         "deterministic": True,
-        "meta_batch_size": 1,
+        "meta_batch_size": 5,
         "encoding": "latency",
         "T": 30,
         "dt": 1e-3,
@@ -132,10 +132,10 @@ if __name__ == "__main__":
         "beta_2": 0.99,
     }
 
-    outer_optim_config = {"step_size": 3e-3, "annealing": "linear"}
+    outer_optim_config = outer_optim_config = {"meta_lr": 1e-3}
 
     meta_config = {
-        "n_epochs": 100,
+        "n_epochs": 50,
         "num_shots": 100,
         "n_samples_test": 1000,
         "first_order": True,
@@ -160,7 +160,7 @@ if __name__ == "__main__":
         dims.append(flat_config["n_hid"])
     dims.append(n_outs[flat_config["dataset"]])
 
-    use_wandb = False
+    use_wandb = True
     use_best_sweep_params = True
     sweep_id = "804krio6"
     best_params_to_use = {"inner_optim", "model", "loss"}
@@ -184,7 +184,7 @@ if __name__ == "__main__":
         best_params.pop("device")
 
     if use_wandb:
-        wandb.init(project="ying_yang_reptile", config=flat_config)
+        wandb.init(project="capocaccia", config=flat_config, entity="m2snn")
         config = wandb.config
     else:
         config = flat_config
@@ -195,54 +195,7 @@ if __name__ == "__main__":
     args = argparse.Namespace(**config)
 
     model = SNN(dims, **config).to(config["device"])
-    loss_fn = SpikeCELoss(alpha=args.alpha, xi=args.xi, beta=args.beta)
-    init_params = OrderedDict(model.meta_named_parameters()).copy()
-    ## MAML
+    maml_trainer = maml_trainer = MAML(model, config)
 
-    import torch.optim as optim
-
-    meta_opt = optim.Adam(model.parameters(), lr=1e-3)
-    inner_opt = torchopt.MetaAdam(
-        model,
-        lr=inner_optim_config["lr"],
-        betas=[inner_optim_config["beta_1"], inner_optim_config["beta_2"]],
-    )
-
-    def adapt(model, training_batch, n_inner_iter=1000):
-        # Adaptation fn
-        params = tuple(model.parameters())
-        meta_opt.zero_grad()
-
-        meta_sample_train, meta_sample_test = training_batch["train"], training_batch["test"]
-        meta_sample_train = [d[0][:100] for d in meta_sample_train]
-        meta_sample_test = [d[0][:100] for d in meta_sample_test]
-
-        # Temporarily enable gradient computation for conducting the optimization
-        for x, y, _ in zip(*meta_sample_train, range(n_inner_iter)):
-
-            out, _ = model(x)
-            loss, _, first_spikes = loss_fn(out, y)
-            inner_opt.step(loss)
-            acc = (first_spikes.argmin(-1) == y).float().mean()
-
-        out_spikes, _ = model(meta_sample_test[0])
-        loss, _, first_spikes = loss_fn(out_spikes, meta_sample_test[1])
-        acc = (first_spikes.argmin(-1) == meta_sample_test[1]).float().mean()
-
-        print(f"Post Acc is {acc}")
-
-        return acc, loss
-
-    training_batch = next(iter(meta_train_dataloader))
-
-    net_state_dict = torchopt.extract_state_dict(model, by="reference", detach_buffers=True)
-    optim_state_dict = torchopt.extract_state_dict(inner_opt, by="reference")
-
-    acc, loss = adapt(model, training_batch)
-
-    torchopt.recover_state_dict(model, net_state_dict)
-    torchopt.recover_state_dict(inner_opt, optim_state_dict)
-
-    loss.backward()
-    for n, p in model.named_parameters():
-        print(n, p.grad.any() if p.grad is not None else p.grad)
+    ## Training
+    do_meta_training(maml_trainer, meta_train_dataloader, meta_test_dataloader, use_tqdm=True)
