@@ -12,10 +12,11 @@ import wandb
 from pathlib import Path
 import glob
 from PIL import Image
-import shutil 
-
+import shutil
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+
 
 class REPTILE(object):
 
@@ -173,23 +174,26 @@ class REPTILE(object):
             "meta_losses": meta_losses,
             "params": adapted_params,
         }
-    
+
+
 class MAML(object):
     def __init__(self, model, flat_config) -> None:
-        
+
         self.model = model
         self.flat_config = flat_config
-        
+
         self.args = argparse.Namespace(**flat_config)
         self.meta_opt = torch.optim.Adam(model.parameters(), flat_config["meta_lr"])
-        self.loss_fn = SpikeCELoss(**{k : flat_config[k] for k in ["alpha", "xi", "beta"]})
+        self.loss_fn = SpikeCELoss(**{k: flat_config[k] for k in ["alpha", "xi", "beta"]})
 
-    def adapt(self, training_sample, inner_opt, n_inner_iter=None, testing_sample=None, position=None):
+    def adapt(
+        self, training_sample, inner_opt, n_inner_iter=None, testing_sample=None, position=None
+    ):
         # Adaptation fn
-        
+
         if testing_sample:
             all_test_outs = []
-        if n_inner_iter is None : 
+        if n_inner_iter is None:
             n_inner_iter = self.flat_config["num_shots"]
 
         if position is not None:
@@ -200,18 +204,17 @@ class MAML(object):
 
             out, _ = self.model(x)
             loss, _, first_spikes = self.loss_fn(out, y)
-            inner_opt.step(loss)    
+            inner_opt.step(loss)
             # acc = (first_spikes.argmin(-1) == y).float().mean()
             if testing_sample is not None and inner_iter % (n_inner_iter // 100) == 0:
-                
+
                 *_, first_spikes = self.test(testing_sample)
                 all_test_outs.append(first_spikes)
-        
+
         if testing_sample is not None:
             return all_test_outs
-    
 
-    def test(self, testing_sample): 
+    def test(self, testing_sample):
 
         if len(testing_sample[0].shape) > 3:
             testing_sample[0] = testing_sample[0].transpose(0, 1).squeeze()
@@ -228,40 +231,38 @@ class MAML(object):
             betas=[self.flat_config["beta_1"], self.flat_config["beta_2"]],
             use_accelerated_op=True,
         )
-        
-        n_tasks = training_batch["train"][0].shape[0 ]
 
-        test_losses = {
-            "pre" : [], 
-            "post" : []
-        }
-        test_accs = {
-            "pre" : [], 
-            "post" : []
-        }
+        n_tasks = training_batch["train"][0].shape[0]
+
+        test_losses = {"pre": [], "post": []}
+        test_accs = {"pre": [], "post": []}
         outer_loss = 0
 
-        net_state_dict = torchopt.extract_state_dict(self.model, by='reference', detach_buffers=True)
-        optim_state_dict = torchopt.extract_state_dict(inner_opt, by='reference')
+        net_state_dict = torchopt.extract_state_dict(
+            self.model, by="reference", detach_buffers=True
+        )
+        optim_state_dict = torchopt.extract_state_dict(inner_opt, by="reference")
 
         if position is not None and pbar is None:
             pbar2 = tqdm(range(n_tasks), desc="Tasks", position=position, leave=None)
         else:
             pbar2 = range(n_tasks)
-        
+
         for i in pbar2:
 
-            #test before
+            # test before
             testing_sample = [d[i] for d in training_batch["test"]]
             test_loss, test_acc, _ = self.test(testing_sample)
             test_losses["pre"].append(test_loss.cpu().data.item())
             test_accs["pre"].append(test_acc)
 
-            #adapt
+            # adapt
             training_sample = [d[i] for d in training_batch["train"]]
-            self.adapt(training_sample, inner_opt, position=position+1 if position is not None else None)
+            self.adapt(
+                training_sample, inner_opt, position=position + 1 if position is not None else None
+            )
 
-            #test after
+            # test after
             test_loss, test_acc, _ = self.test(testing_sample)
             test_losses["post"].append(test_loss.cpu().data.item())
             test_accs["post"].append(test_acc)
@@ -271,9 +272,15 @@ class MAML(object):
             torchopt.recover_state_dict(inner_opt, optim_state_dict)
 
         if pbar is not None:
-            pbar.set_description(
-                f"Test Acc : {np.mean(test_accs["pre"][-n_tasks:]):2f}"
-                + f"-> {np.mean(test_accs["post"][-n_tasks:]):2f}")
+            # pbar.set_description(
+            #     f"Test Acc : { np.mean(test_accs["pre"][-n_tasks:]):2f} -> {np.mean(test_accs["post"][-n_tasks:]):2f}"
+            #     )
+            pbar.set_posfix(
+                {
+                    "Test Acc Pre": np.mean(test_accs["pre"][-n_tasks:]),
+                    "Test Acc Post": np.mean(test_accs["post"][-n_tasks:]),
+                }
+            )
 
         if train:
             self.meta_opt.zero_grad()
@@ -282,8 +289,9 @@ class MAML(object):
 
         return outer_loss, (test_losses, test_accs)
 
+
 def do_meta_training(meta_trainer, meta_train_loader, meta_test_loader, use_tqdm=True, pbar=None):
-    
+
     use_wandb = wandb.run is not None
 
     if use_tqdm and pbar is None:
@@ -293,7 +301,7 @@ def do_meta_training(meta_trainer, meta_train_loader, meta_test_loader, use_tqdm
 
     all_train_results = []
     all_test_results = []
-    
+
     for epoch in pbar:
 
         for training_batch in tqdm(meta_train_loader, desc="Meta-Batches", leave=None, position=1):
@@ -320,13 +328,21 @@ def do_meta_training(meta_trainer, meta_train_loader, meta_test_loader, use_tqdm
             wandb.log(
                 {
                     "train_loss": outer_loss.cpu().data.item(),
-                    "test_acc_pre": np.mean([r[1]['pre'] for r in all_test_results[-len(meta_test_loader):]]),
-                    "test_acc_post": np.mean([r[1]['post'] for r in all_test_results[-len(meta_test_loader):]]),
-                    "train_acc_pre": np.mean([r[1]['pre'] for r in all_train_results[-len(meta_train_loader):]]),
-                    "train_acc_post": np.mean([r[1]['post'] for r in all_train_results[-len(meta_train_loader):]]),
+                    "test_acc_pre": np.mean(
+                        [r[1]["pre"] for r in all_test_results[-len(meta_test_loader) :]]
+                    ),
+                    "test_acc_post": np.mean(
+                        [r[1]["post"] for r in all_test_results[-len(meta_test_loader) :]]
+                    ),
+                    "train_acc_pre": np.mean(
+                        [r[1]["pre"] for r in all_train_results[-len(meta_train_loader) :]]
+                    ),
+                    "train_acc_post": np.mean(
+                        [r[1]["post"] for r in all_train_results[-len(meta_train_loader) :]]
+                    ),
                 }
             )
-                
+
     return meta_trainer
 
 
@@ -334,17 +350,17 @@ def create_gif(meta_trainer, train_sample, test_sample, inner_opt=None):
 
     if inner_opt is None:
         inner_opt = torchopt.MetaAdam(
-        meta_trainer.model,
-        meta_trainer.config["lr"],
-        betas=[meta_trainer.config["beta_1"], meta_trainer.config["beta_2"]],
-        use_accelerated_op=True,
-    )
-        
+            meta_trainer.model,
+            meta_trainer.flat_config["lr"],
+            betas=[meta_trainer.flat_config["beta_1"], meta_trainer.flat_config["beta_2"]],
+            use_accelerated_op=True,
+        )
+
     test_outs = meta_trainer.adapt(
-    train_sample,
-    inner_opt=inner_opt,
-    n_inner_iter=1000,
-    testing_sample=test_sample,
+        train_sample,
+        inner_opt=inner_opt,
+        n_inner_iter=1000,
+        testing_sample=test_sample,
     )
 
     path = Path("gif/imgs/")
@@ -352,41 +368,50 @@ def create_gif(meta_trainer, train_sample, test_sample, inner_opt=None):
 
     for i, test_out in enumerate(test_outs):
         plt.close()
-        plt.scatter(test_sample[0].argmax(0)[:, 0], test_sample[0].argmax(0)[:, 1], c=test_out)
+        plt.scatter(
+            test_sample[0].argmax(0)[:, 0],
+            test_sample[0].argmax(0)[:, 1],
+            c=F.softmin(test_out).cpu().data.numpy(),
+        )
         acc = (test_out == test_sample[1].squeeze()).float().mean()
         plt.scatter(
-            train_sample[0][i].argmax(0)[:, 0], train_sample[0][i].argmax(0)[:, 1], c=train_sample[1][i].item(), marker="X", s=300
+            train_sample[0][i].argmax(0)[:, 0],
+            train_sample[0][i].argmax(0)[:, 1],
+            c=F.one_hot(train_sample[1][i], 3),
+            marker="X",
+            s=300,
         )
         plt.title(f"Acc : {acc}")
         plt.savefig("gif/imgs/{}.png".format(i))
 
     plt.close()
     plt.scatter(
-        test_sample[0].argmax(0)[:, 0], test_sample[0].argmax(0)[:, 1], c=test_sample[1].squeeze()
+        test_sample[0].argmax(0)[:, 0],
+        test_sample[0].argmax(0)[:, 1],
+        c=F.one_hot(test_sample[1].squeeze()),
     )
     plt.savefig("gif/imgs/{}.png".format(len(test_outs)))
     files = glob.glob("gif/*.png")
     files.sort(key=lambda x: int(x.split("/")[-1].split(".")[0]))
 
-
     image_array = []
 
     for my_file in files:
-        
+
         image = Image.open(my_file)
         image_array.append(image)
 
-    print('image_arrays shape:', np.array(image_array).shape)
-
+    print("image_arrays shape:", np.array(image_array).shape)
 
     # Create the figure and axes objects
     fig, ax = plt.subplots()
 
     # Set the initial image
     im = ax.imshow(image_array[11], animated=True)
+
     def update(i):
         im.set_array(image_array[i])
-    
+
     # Create the animation object
     animation_fig = animation.FuncAnimation(
         fig,
@@ -395,7 +420,7 @@ def create_gif(meta_trainer, train_sample, test_sample, inner_opt=None):
         interval=200,
         blit=True,
         repeat_delay=5000,
-        repeat=False
+        repeat=False,
     )
 
     # Show the animation
