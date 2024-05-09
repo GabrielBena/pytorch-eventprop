@@ -338,7 +338,7 @@ def do_meta_training(meta_trainer, meta_train_loader, meta_test_loader, use_tqdm
             + f"-> {np.mean([r[1]['post'] for r in all_test_results[-len(meta_test_loader):]]):2f}"
         )
 
-        if use_wandb:
+        if use_wandb and epoch > 0:
             wandb.log(
                 {
                     "train_loss": train_outer_loss.cpu().data.item(),

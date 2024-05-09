@@ -41,7 +41,7 @@ if __name__ == "__main__":
         "seed": np.random.randint(1000),
         "dataset": "ying_yang",
         "deterministic": True,
-        "meta_batch_size": 5,
+        "meta_batch_size": 10,
         "encoding": "latency",
         "T": 30,
         "dt": 1e-3,
@@ -130,10 +130,10 @@ if __name__ == "__main__":
         "beta_2": 0.99,
     }
 
-    outer_optim_config = outer_optim_config = {"meta_lr": 1e-2, "meta_gamma": 0.95}
+    outer_optim_config = outer_optim_config = {"meta_lr": 1e-3, "meta_gamma": 0.95}
 
     meta_config = {
-        "n_epochs": 2,
+        "n_epochs": 300,
         "num_shots": 100,
         "n_samples_test": 1000,
         "first_order": True,
@@ -158,7 +158,7 @@ if __name__ == "__main__":
         dims.append(flat_config["n_hid"])
     dims.append(n_outs[flat_config["dataset"]])
 
-    use_wandb = False
+    use_wandb = True
     use_best_sweep_params = True
     sweep_id = "804krio6"
     best_params_to_use = {"inner_optim", "model", "loss"}
