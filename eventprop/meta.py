@@ -311,16 +311,20 @@ def do_meta_training(meta_trainer, meta_train_loader, meta_test_loader, use_tqdm
 
     for epoch in pbar:
 
-        for training_batch in tqdm(meta_train_loader, desc="Meta-Batches", leave=None, position=1):
-            train_outer_loss, train_results = meta_trainer.get_outer_loss(
-                training_batch,
-                train=True,
-                position=2,
-            )
-            all_train_results.append(train_results)
+        if epoch > 0:
 
-        if meta_trainer.meta_sch:
-            meta_trainer.meta_sch.step()
+            for training_batch in tqdm(
+                meta_train_loader, desc="Meta-Batches", leave=None, position=1
+            ):
+                train_outer_loss, train_results = meta_trainer.get_outer_loss(
+                    training_batch,
+                    train=True,
+                    position=2,
+                )
+                all_train_results.append(train_results)
+
+            if meta_trainer.meta_sch:
+                meta_trainer.meta_sch.step()
 
         for testing_batch in meta_test_loader:
             test_outer_loss, test_results = meta_trainer.get_outer_loss(
