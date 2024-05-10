@@ -17,6 +17,7 @@ import argparse
 from torchviz import make_dot
 
 from yingyang.meta_dataset import get_all_datasets
+from randman.meta import get_all_datasets as get_all_datasets_r
 from torchmeta.transforms import ClassSplitter
 
 from eventprop.config import get_flat_dict_from_nested
@@ -39,7 +40,7 @@ if __name__ == "__main__":
 
     data_config = {
         "seed": np.random.randint(1000),
-        "dataset": "ying_yang",
+        "dataset": "randman",
         "deterministic": True,
         "meta_batch_size": 10,
         "encoding": "latency",
@@ -52,7 +53,16 @@ if __name__ == "__main__":
         "n_tasks_per_split_train": 50,  # number of rotations
         "n_tasks_per_split_test": 20,  # number of rotations
         "n_tasks_per_split_val": 20,  # number of rotations
-        "dataset_size": 1000,  # testing size
+        "dataset_size": 500,  # testing size
+    }
+
+    randman_config = {
+        "nb_classes": 3,
+        "nb_units": 5,
+        "nb_steps": data_config["T"],
+        "dim_manifold": 1,
+        "nb_spikes": 1,
+        "shuffle": True,
     }
 
     data_args = argparse.Namespace(**data_config)
@@ -74,18 +84,37 @@ if __name__ == "__main__":
         shuffle=False,
     )
 
-    (
+    if data_config["dataset"] == "ying_yang":
+
         (
-            meta_train_dataset,
-            meta_val_dataset,
-            meta_test_dataset,
-        ),
+            (
+                meta_train_dataset,
+                meta_val_dataset,
+                meta_test_dataset,
+            ),
+            (
+                meta_train_dataloader,
+                meta_val_dataloader,
+                meta_test_dataloader,
+            ),
+        ) = get_all_datasets(data_config, dataset_split, encode_tranform)
+
+    elif data_config["dataset"] == "randman":
         (
-            meta_train_dataloader,
-            meta_val_dataloader,
-            meta_test_dataloader,
-        ),
-    ) = get_all_datasets(data_config, dataset_split, encode_tranform)
+            (
+                meta_train_dataset,
+                meta_val_dataset,
+                meta_test_dataset,
+            ),
+            (
+                meta_train_dataloader,
+                meta_val_dataloader,
+                meta_test_dataloader,
+            ),
+        ) = get_all_datasets_r(data_config, randman_config, dataset_split, encode_tranform=None)
+
+    else:
+        raise NotImplemented
 
     ## Models
 
@@ -111,8 +140,12 @@ if __name__ == "__main__":
         "device": torch.device("cpu"),
     }
 
-    n_ins = {"mnist": 784, "ying_yang": 5 if data_config["encoding"] == "latency" else 4}
-    n_outs = {"mnist": 10, "ying_yang": 3}
+    n_ins = {
+        "mnist": 784,
+        "ying_yang": 5 if data_config["encoding"] == "latency" else 4,
+        "randman": randman_config["nb_units"],
+    }
+    n_outs = {"mnist": 10, "ying_yang": 3, "randman": randman_config["nb_classes"]}
 
     loss_config = {
         "loss": "ce_temporal",
@@ -133,9 +166,9 @@ if __name__ == "__main__":
     outer_optim_config = outer_optim_config = {"meta_lr": 1e-3, "meta_gamma": 0.95}
 
     meta_config = {
-        "n_epochs": 300,
-        "num_shots": 100,
-        "n_samples_test": 1000,
+        "n_epochs": 100,
+        "num_shots": 25,
+        "n_samples_test": 300,
         "first_order": True,
         "learn_step_size": False,
     }
@@ -158,7 +191,7 @@ if __name__ == "__main__":
         dims.append(flat_config["n_hid"])
     dims.append(n_outs[flat_config["dataset"]])
 
-    use_wandb = True
+    use_wandb = False
     use_best_sweep_params = True
     sweep_id = "804krio6"
     best_params_to_use = {"inner_optim", "model", "loss"}

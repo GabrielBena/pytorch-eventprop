@@ -209,6 +209,8 @@ class MAML(object):
             pbar = range(n_inner_iter)
         for x, y, inner_iter in zip(*training_sample, pbar):
 
+            if self.flat_config["dataset"] == "randman":
+                x = x.unsqueeze(1)
             out, _ = self.model(x)
             loss, _, first_spikes = self.loss_fn(out, y)
             inner_opt.step(loss)
@@ -223,9 +225,15 @@ class MAML(object):
 
     def test(self, testing_sample):
 
+        if len(testing_sample[0].shape) == 3 and self.flat_config["dataset"] == "randman":
+            testing_sample[0] = testing_sample[0].transpose(0, 1).clone()
+
         if len(testing_sample[0].shape) > 3:
-            testing_sample[0] = testing_sample[0].transpose(0, 1).squeeze()
+            testing_sample[0] = testing_sample[0].squeeze()
+            if self.flat_config["dataset"] == "yingyang":
+                testing_sample[0] = testing_sample[0].transpose(0, 1)
         out_spikes, _ = self.model(testing_sample[0])
+
         loss, _, first_spikes = self.loss_fn(out_spikes, testing_sample[1])
         acc = (first_spikes.argmin(-1) == testing_sample[1]).float().mean()
         return loss, acc, first_spikes
@@ -270,6 +278,7 @@ class MAML(object):
             )
 
             # test after
+            testing_sample = [d[i] for d in training_batch["test"]]
             test_loss, test_acc, _ = self.test(testing_sample)
             test_losses["post"].append(test_loss.cpu().data.item())
             test_accs["post"].append(test_acc)
