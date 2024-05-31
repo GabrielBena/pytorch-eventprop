@@ -203,12 +203,12 @@ def main(args, use_wandb=False, **override_params):
 
 if __name__ == "__main__":
 
-    use_wandb = True
+    use_wandb = False
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
-    sweep_id = "s5hcchgl"
-    use_best_params = False
-    best_params_to_use = {"optim", "model"}
+    sweep_id = "0da5yx86"
+    use_best_params = True
+    best_params_to_use = {"optim", "model", "loss"}
     # best_params_to_use = None
     use_run_params = False
 
@@ -218,12 +218,12 @@ if __name__ == "__main__":
         "dataset": "ying_yang",
         "subset_sizes": [5000, 1000],
         "deterministic": True,
-        "batch_size": 25,
+        "batch_size": 32,
         "encoding": "latency",
         "T": 30,
         "dt": 1e-3,
         "t_min": 0,
-        "t_max": 5,
+        "t_max": None,
         "data_folder": f"{file_dir}/../../data",
         "input_dropout": 0.0,
     }
@@ -248,20 +248,20 @@ if __name__ == "__main__":
             "tau_s": 5e-3,
         },
         "weights": {
-            "init_mode": "kaiming_both",
+            "init_mode": "paper",
             # Used in case of "kaiming_both" init_mode
             "scales": {
                 0: {
-                    "scale_0_mu": 3.5,
-                    "scale_0_sigma": 3,
+                    "scale_0_mu": 3,
+                    "scale_0_sigma": 1.5,
                 },
                 1: {
-                    "scale_1_mu": 5,
+                    "scale_1_mu": 9.5,
                     "scale_1_sigma": 2.5,
                 },
             },
             # Used in case of "paper" init_mode
-            "distribution": paper_params["ying_yang_BS2"],
+            "distribution": paper_params["ying_yang"],
             "n_hid": 120,
             "resolve_silent": False,
             "dropout": 0.0,
@@ -270,16 +270,16 @@ if __name__ == "__main__":
     }
 
     training_config = {
-        "n_epochs": 15,
-        "n_tests": 5,
+        "n_epochs": 60,
+        "n_tests": 1,
         "exclude_equal": False,
     }
 
     optim_config = {
         "optimizer": "adam",
-        "lr": 0.01,
+        "lr": 5e-3,
         "weight_decay": 0.0,
-        "gamma": 0.8,  # decay per epoch
+        "gamma": 0.95,  # decay per epoch
         "adam_beta_1": 0.9,
         "adam_beta_2": 0.999,
     }
@@ -287,8 +287,8 @@ if __name__ == "__main__":
     loss_config = {
         # "loss": "quadratic",
         "loss": "ce_temporal",
-        "alpha": 0.0,
-        "xi": 1.0,
+        "alpha": 3e-3,
+        "xi": 0.5,
         "beta": 6.4,
     }
 
@@ -318,7 +318,8 @@ if __name__ == "__main__":
         best_params = {}
 
     if use_best_params and best_params_to_use is not None:
-        best_params = {k: best_params[k] for k in get_flat_dict_from_nested({k: config[k] for k in best_params_to_use})}
+        flat = get_flat_dict_from_nested({k: config[k] for k in best_params_to_use})
+        best_params = {k: best_params.get(k, flat[k]) for k in flat}
 
     if "seed" in best_params:
         best_params.pop("seed")
