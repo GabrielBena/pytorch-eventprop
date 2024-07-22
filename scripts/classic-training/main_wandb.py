@@ -26,9 +26,13 @@ def main(args, use_wandb=False, **override_params):
     elif isinstance(args, dict):
         config = args
     else:
-        raise ValueError("Invalid type for run configuration, must be dict or Namespace")
+        raise ValueError(
+            "Invalid type for run configuration, must be dict or Namespace"
+        )
 
-    config["device"] = config.get("device", torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    config["device"] = config.get(
+        "device", torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    )
 
     if use_wandb:
         if wandb.run is None:
@@ -101,7 +105,9 @@ def main(args, use_wandb=False, **override_params):
         test_dataset = ConcatDataset(
             [
                 YinYangDataset(
-                    size=(config["subset_sizes"][1] if config["subset_sizes"][1] else 2000),
+                    size=(
+                        config["subset_sizes"][1] if config["subset_sizes"][1] else 2000
+                    ),
                     seed=config["seed"] + i,
                 )
                 for i in range(1, 5)
@@ -116,7 +122,9 @@ def main(args, use_wandb=False, **override_params):
     )
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size=(min(256, config["subset_sizes"][1]) if config["subset_sizes"][1] else 256),
+        batch_size=(
+            min(256, config["subset_sizes"][1]) if config["subset_sizes"][1] else 256
+        ),
         shuffle=False,
         drop_last=True,
     )
@@ -157,7 +165,9 @@ def main(args, use_wandb=False, **override_params):
             betas=(config["adam_beta_1"], config["adam_beta_2"]),
         )
     except ValueError:
-        optimizer = optimizers_type[config["optimizer"]](model.parameters(), config["lr"])
+        optimizer = optimizers_type[config["optimizer"]](
+            model.parameters(), config["lr"]
+        )
 
     if config.get("gamma", None) is not None:
         scheduler = torch.optim.lr_scheduler.StepLR(
@@ -203,7 +213,7 @@ def main(args, use_wandb=False, **override_params):
 
 if __name__ == "__main__":
 
-    use_wandb = True
+    use_wandb = False
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
     sweep_id = "s5hcchgl"
@@ -214,16 +224,16 @@ if __name__ == "__main__":
 
     data_config = {
         "seed": np.random.randint(10000),
-        # "seed": 42,
+        # "seed": 4424,
         "dataset": "ying_yang",
         "subset_sizes": [5000, 1000],
         "deterministic": True,
-        "batch_size": 25,
+        "batch_size": 22,
         "encoding": "latency",
-        "T": 30,
+        "T": 27,
         "dt": 1e-3,
-        "t_min": 0,
-        "t_max": 5,
+        "t_min": 2,
+        "t_max": None,
         "data_folder": f"{file_dir}/../../data",
         "input_dropout": 0.0,
     }
@@ -238,6 +248,10 @@ if __name__ == "__main__":
             "sigma": [0.78, 0.1],
         },
         "ying_yang_BS2": {"mu": [1.0, 0.4], "sigma": [0.01, 0.1]},
+        "ying_yang_timo": {
+            "mu": [1.5 * 2, 0.93 * 2],
+            "sigma": [0.78 * 2, 0.1 * 2],
+        },
     }
 
     model_config = {
@@ -248,20 +262,20 @@ if __name__ == "__main__":
             "tau_s": 5e-3,
         },
         "weights": {
-            "init_mode": "kaiming_both",
+            # "init_mode": "kaiming_both",
+            "init_mode": "paper",
             # Used in case of "kaiming_both" init_mode
             "scales": {
                 0: {
-                    "scale_0_mu": 3.5,
-                    "scale_0_sigma": 3,
+                    "scale_0_mu": 3.2,
+                    "scale_0_sigma": 3.2,
                 },
                 1: {
-                    "scale_1_mu": 5,
-                    "scale_1_sigma": 2.5,
+                    "scale_1_mu": 5.2,
+                    "scale_1_sigma": 2.8,
                 },
             },
             # Used in case of "paper" init_mode
-            "distribution": paper_params["ying_yang_BS2"],
             "n_hid": 120,
             "resolve_silent": False,
             "dropout": 0.0,
@@ -269,17 +283,25 @@ if __name__ == "__main__":
         "device": torch.device("cpu"),
     }
 
+    model_config["weights"]["distribution"] = (
+        paper_params["ying_yang_timo"]
+        if "paper" in model_config["weights"]["init_mode"] == "paper"
+        else None
+    )
+
     training_config = {
-        "n_epochs": 15,
-        "n_tests": 5,
+        "n_epochs": 60,
+        "n_tests": 15,
         "exclude_equal": False,
     }
 
     optim_config = {
         "optimizer": "adam",
-        "lr": 0.01,
+        # "lr": 0.0019,
+        "lr": 5e-2,
+        # "weight_decay": 0.00000065,
         "weight_decay": 0.0,
-        "gamma": 0.8,  # decay per epoch
+        "gamma": 0.95,  # decay per epoch
         "adam_beta_1": 0.9,
         "adam_beta_2": 0.999,
     }
@@ -287,9 +309,9 @@ if __name__ == "__main__":
     loss_config = {
         # "loss": "quadratic",
         "loss": "ce_temporal",
-        "alpha": 0.0,
-        "xi": 1.0,
-        "beta": 6.4,
+        "alpha": 0.0096,
+        "xi": 1.43,
+        "beta": 96,
     }
 
     config = {
@@ -318,7 +340,12 @@ if __name__ == "__main__":
         best_params = {}
 
     if use_best_params and best_params_to_use is not None:
-        best_params = {k: best_params[k] for k in get_flat_dict_from_nested({k: config[k] for k in best_params_to_use})}
+        best_params = {
+            k: best_params[k]
+            for k in get_flat_dict_from_nested(
+                {k: config[k] for k in best_params_to_use}
+            )
+        }
 
     if "seed" in best_params:
         best_params.pop("seed")
@@ -337,16 +364,28 @@ if __name__ == "__main__":
 
     try:
 
-        all_test_accs = np.array([train_results["test_acc"] for train_results in all_train_results])
-        all_test_losses = np.array([train_results["test_loss"] for train_results in all_train_results])
+        all_test_accs = np.array(
+            [train_results["test_acc"] for train_results in all_train_results]
+        )
+        all_test_losses = np.array(
+            [train_results["test_loss"] for train_results in all_train_results]
+        )
 
     except ValueError:
-        all_test_accs = np.array([train_results["test_acc"] for train_results in all_train_results], dtype=object)
-        all_test_losses = np.array([train_results["test_loss"] for train_results in all_train_results], dtype=object)
+        all_test_accs = np.array(
+            [train_results["test_acc"] for train_results in all_train_results],
+            dtype=object,
+        )
+        all_test_losses = np.array(
+            [train_results["test_loss"] for train_results in all_train_results],
+            dtype=object,
+        )
 
     data = [
         [test_accs, test_losses, seed]
-        for test_accs, test_losses, seed in zip(all_test_accs, all_test_losses, all_seeds)
+        for test_accs, test_losses, seed in zip(
+            all_test_accs, all_test_losses, all_seeds
+        )
     ]
     table = wandb.Table(data=data, columns=["test_acc", "test_loss", "seed"])
 

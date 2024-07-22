@@ -11,6 +11,7 @@ import torch.nn.functional as F
 
 from snntorch.spikegen import rate, latency
 from eventprop.config import get_flat_dict_from_nested
+from eventprop.data import encode_data
 
 
 def is_notebook():
@@ -45,7 +46,8 @@ def compute_accuracy(first_spike_times, labels, exclude_equal=True):
     if exclude_equal:
         single_spiking = (
             np.count_nonzero(
-                get_label_outputs(first_spike_times, labels)[..., None] == first_spike_times,
+                get_label_outputs(first_spike_times, labels)[..., None]
+                == first_spike_times,
                 axis=-1,
             )
             == 1
@@ -53,46 +55,6 @@ def compute_accuracy(first_spike_times, labels, exclude_equal=True):
         correct = np.logical_and(correct, single_spiking)
 
     return correct.mean(), correct
-
-
-def encode_data(data, args):
-    if not isinstance(data, torch.Tensor):
-        data = torch.from_numpy(data)
-    if isinstance(args, dict):
-        args = argparse.Namespace(**args)
-
-    if "latency" in args.encoding:
-        if not "eventprop" in args.encoding:
-            spike_data = latency(
-                data,
-                args.T if args.t_max is None else args.T - args.t_max,
-                first_spike_time=args.t_min,
-                normalize=True,
-                linear=True,
-                interpolate=False,
-            ).flatten(start_dim=2)
-
-            if args.t_max is not None:
-                spike_data = torch.cat([spike_data, torch.zeros_like(spike_data[-args.t_max :])], 0)
-
-        else:
-            if args.t_max is None:
-                args.t_max = int(args.T * 3 / 5)
-            spike_data = args.t_min + (args.t_max - args.t_min) * (data < 0.5).view(
-                data.shape[0], -1
-            )
-            spike_data = F.one_hot(spike_data.long(), int(args.T)).permute(2, 0, 1)
-
-        if args.dataset == "ying_yang":
-            t0_spike = torch.zeros_like(spike_data[..., 0])
-            t0_spike[0] = 1.0
-            spike_data = torch.cat([spike_data, t0_spike.unsqueeze(-1)], dim=-1)
-
-    else:
-        spike_data = rate(data, args.T, gain=0.7)
-        if len(spike_data.shape) > 2:
-            spike_data = spike_data.flatten(start_dim=2).float()
-    return spike_data
 
 
 def train(
@@ -120,11 +82,13 @@ def train(
     total_loss = []
     total_samples = []
 
-    for batch_idx, (input, target) in enumerate(pbar_f):
-        input, target = input.to(args.device), target.to(args.device)
-        input = encode_data(input, args)
+    for batch_idx, (data, target) in enumerate(pbar_f):
+        data, target = data.to(args.device), target.to(args.device)
+        spike_data = (
+            encode_data(data, args) if not args.pre_encoded else data.transpose(0, 1)
+        )
 
-        output, out_dict = model(input)
+        output, out_dict = model(spike_data)
         if first_spike_fn:
             if isinstance(first_spike_fn, (list, tuple)):
                 all_first_spikes = tuple(fn(output) for fn in first_spike_fn)
@@ -165,12 +129,17 @@ def train(
             scheduler.step()
 
         # if batch_idx % args.print_freq == 0:
-        frs = np.round(np.array([s.data.cpu().numpy().mean() for s in out_dict["spikes"]]), 2)
+        frs = np.round(
+            np.array([s.data.cpu().numpy().mean() for s in out_dict["spikes"]]), 2
+        )
         desc = "Batch {:03d}/{:03d}: Acc {:.2f}  Loss {:.3f} FR {}".format(
             batch_idx,
             len(loader),
-            100 * np.array(total_correct)[-n_last:].sum() / np.array(total_samples)[-n_last:].sum(),
-            np.array(total_loss)[-n_last:].sum() / np.array(total_samples)[-n_last:].sum(),
+            100
+            * np.array(total_correct)[-n_last:].sum()
+            / np.array(total_samples)[-n_last:].sum(),
+            np.array(total_loss)[-n_last:].sum()
+            / np.array(total_samples)[-n_last:].sum(),
             frs,
         )
         descs = pbar.desc.split("|")
@@ -192,7 +161,11 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
     with torch.no_grad():
         for batch_idx, (data, target) in enumerate(loader):
             data, target = data.to(args.device), target.to(args.device)
-            spike_data = encode_data(data, args)
+            spike_data = (
+                encode_data(data, args)
+                if not args.pre_encoded
+                else data.transpose(0, 1)
+            )
 
             output, spikes = model(spike_data)
             if first_spike_fn:
@@ -299,7 +272,9 @@ def train_single_model(
         )
 
         if (
-            total_spikes == 0 and epoch > 0 and getattr(model, "model_type", "eventprop")
+            total_spikes == 0
+            and epoch > 0
+            and getattr(model, "model_type", "eventprop")
         ) == "eventprop":
             print("No spikes fired, stopping training")
             spiking = False

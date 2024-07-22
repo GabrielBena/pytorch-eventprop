@@ -19,6 +19,7 @@ from yingyang.dataset import YinYangDataset
 from eventprop.models import SNN, SpikeCELoss, FirstSpikeTime, SpikeQuadLoss
 from eventprop.training import train_single_model
 from eventprop.config import get_flat_dict_from_nested
+from eventprop.data import encode_data
 
 
 def main(args, use_wandb=False, **override_params):
@@ -27,9 +28,13 @@ def main(args, use_wandb=False, **override_params):
     elif isinstance(args, dict):
         config = args
     else:
-        raise ValueError("Invalid type for run configuration, must be dict or Namespace")
+        raise ValueError(
+            "Invalid type for run configuration, must be dict or Namespace"
+        )
 
-    config["device"] = config.get("device", torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    config["device"] = config.get(
+        "device", torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    )
 
     if use_wandb:
         if wandb.run is None:
@@ -101,29 +106,30 @@ def main(args, use_wandb=False, **override_params):
             # seed=config["seed"],
             seed=42,
         )
-        # test_dataset = ConcatDataset(
-        #     [
-        #         YinYangDataset(
-        #             size=(config["subset_sizes"][1] if config["subset_sizes"][1] else 2000),
-        #             # seed=config["seed"] + i,
-        #         )
-        #         for i in range(1, 5)
-        #     ],
-        # )
 
         test_dataset = YinYangDataset(
             size=(config["subset_sizes"][1] if config["subset_sizes"][1] else 2000),
             seed=43,
         )
+
+        if config["pre_encoded"]:
+            train_dataset.data, train_dataset.targets, _ = encode_data(
+                train_dataset, config
+            )
+            test_dataset.data, test_dataset.targets, _ = encode_data(
+                test_dataset, config
+            )
     else:
         raise ValueError("Invalid dataset name")
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True
+        train_dataset, batch_size=config["batch_size"], shuffle=False, drop_last=True
     )
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size=(min(256, config["subset_sizes"][1]) if config["subset_sizes"][1] else 256),
+        batch_size=(
+            min(256, config["subset_sizes"][1]) if config["subset_sizes"][1] else 256
+        ),
         shuffle=False,
         drop_last=True,
     )
@@ -174,7 +180,9 @@ def main(args, use_wandb=False, **override_params):
             **opt_args,
         )
     except ValueError:
-        optimizer = optimizers_types[config["optimizer"]](model.parameters(), config["lr"])
+        optimizer = optimizers_types[config["optimizer"]](
+            model.parameters(), config["lr"]
+        )
 
     if config.get("gamma", None) is not None:
         scheduler = torch.optim.lr_scheduler.StepLR(
@@ -182,6 +190,7 @@ def main(args, use_wandb=False, **override_params):
         )
     else:
         scheduler = None
+
     loaders = {"train": train_loader, "test": test_loader}
 
     if config["loss"] == "ce_temporal":
@@ -223,9 +232,9 @@ if __name__ == "__main__":
     use_wandb = True
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
-    sweep_id = "0da5yx86"
+    sweep_id = "5e2btkru"
     use_best_params = False
-    best_params_to_use = {"model"}
+    best_params_to_use = {"optim"}
     # best_params_to_use = None
     use_run_params = False
 
@@ -233,9 +242,9 @@ if __name__ == "__main__":
         # "seed": np.random.randint(10000),
         "seed": 42,
         "dataset": "ying_yang",
-        "subset_sizes": [5000, 1000],
+        "subset_sizes": [300, 1000],
         "deterministic": True,
-        "batch_size": 22,
+        "batch_size": 1,
         "encoding": "latency",
         "T": 28,
         "dt": 1e-3,
@@ -243,6 +252,8 @@ if __name__ == "__main__":
         "t_max": 1,
         "data_folder": f"{file_dir}/../../data",
         "input_dropout": 0.0,
+        "exclude_ambiguous": True,
+        "pre_encoded": True,
     }
 
     paper_params = {
@@ -278,7 +289,6 @@ if __name__ == "__main__":
                 },
             },
             # Used in case of "paper" init_mode
-            "distribution": paper_params["ying_yang"],
             "n_hid": 120,
             "resolve_silent": False,
             "dropout": 0.0,
@@ -286,18 +296,26 @@ if __name__ == "__main__":
         "device": torch.device("cpu"),
     }
 
+    model_config["weights"]["distribution"] = (
+        paper_params["ying_yang"]
+        if "paper" in model_config["weights"]["init_mode"]
+        else None
+    )
+
     training_config = {
-        "n_epochs": 15,
-        "n_tests": 5,
+        "n_epochs": 2,
+        "n_tests": 12,
         "exclude_equal": False,
     }
 
     optim_config = {
-        "optimizer": "AdamW",
-        "lr": 0.002,
-        "weight_decay": 1.0e-2,
+        "optimizer": "Adam",
+        # "lr": 1.9e-3,
+        "lr": 1.86e-2,
+        "weight_decay": 1.26e-6,
         # "weight_decay": 0.0,
-        "gamma": 0.95,  # decay per epoch
+        # "gamma": 0.95,  # decay per epoch
+        "gamma": 0.24,
         "adam_beta_1": 0.9,
         "adam_beta_2": 0.999,
         # "amsgrad": False,
@@ -307,7 +325,7 @@ if __name__ == "__main__":
     loss_config = {
         # "loss": "quadratic",
         "loss": "ce_temporal",
-        "alpha": 0.01,
+        "alpha": 1e-2,
         "xi": 1.5,
         "beta": 100,
     }
@@ -347,27 +365,41 @@ if __name__ == "__main__":
         best_params.pop("device")
 
     for test in range(training_config["n_tests"]):
+        print(f"Starting test {test} with seed {flat_config['seed']}")
         train_results = main(
             flat_config,
             use_wandb=use_wandb,
-            seed=flat_config["seed"] + test,
+            seed=flat_config["seed"],
             **best_params,
         )
+        flat_config["seed"] += 2
         all_train_results.append(train_results)
         all_seeds.append(flat_config["seed"] + test)
 
     try:
 
-        all_test_accs = np.array([train_results["test_acc"] for train_results in all_train_results])
-        all_test_losses = np.array([train_results["test_loss"] for train_results in all_train_results])
+        all_test_accs = np.array(
+            [train_results["test_acc"] for train_results in all_train_results]
+        )
+        all_test_losses = np.array(
+            [train_results["test_loss"] for train_results in all_train_results]
+        )
 
     except ValueError:
-        all_test_accs = np.array([train_results["test_acc"] for train_results in all_train_results], dtype=object)
-        all_test_losses = np.array([train_results["test_loss"] for train_results in all_train_results], dtype=object)
+        all_test_accs = np.array(
+            [train_results["test_acc"] for train_results in all_train_results],
+            dtype=object,
+        )
+        all_test_losses = np.array(
+            [train_results["test_loss"] for train_results in all_train_results],
+            dtype=object,
+        )
 
     data = [
         [test_accs, test_losses, seed]
-        for test_accs, test_losses, seed in zip(all_test_accs, all_test_losses, all_seeds)
+        for test_accs, test_losses, seed in zip(
+            all_test_accs, all_test_losses, all_seeds
+        )
     ]
     table = wandb.Table(data=data, columns=["test_acc", "test_loss", "seed"])
 
@@ -392,6 +424,6 @@ if __name__ == "__main__":
         str(
             f"Finished run, Mean test acc: {np.mean(all_test_accs[:, -1])} "
             + f"Mean test loss: {np.mean(all_test_losses)} "
-            + f"Max test acc: {np.max(all_test_accs)} "
+            + f"Max test acc: {np.mean(all_test_accs.max(1))} "
         )
     )
