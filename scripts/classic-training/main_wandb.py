@@ -5,6 +5,8 @@ import torch
 import torch.nn.functional as F
 import argparse
 import os
+import inspect
+
 from snntorch.functional.loss import (
     ce_temporal_loss,
     SpikeTime,
@@ -18,6 +20,7 @@ from yingyang.dataset import YinYangDataset
 from eventprop.models import SNN, SpikeCELoss, FirstSpikeTime, SpikeQuadLoss
 from eventprop.training import train_single_model
 from eventprop.config import get_flat_dict_from_nested
+from eventprop.data import encode_data
 
 
 def main(args, use_wandb=False, **override_params):
@@ -100,20 +103,22 @@ def main(args, use_wandb=False, **override_params):
 
         train_dataset = YinYangDataset(
             size=config["subset_sizes"][0] if config["subset_sizes"][0] else 5000,
-            seed=config["seed"],
+            # seed=config["seed"],
+            seed=42,
         )
-        test_dataset = ConcatDataset(
-            [
-                YinYangDataset(
-                    size=(
-                        config["subset_sizes"][1] if config["subset_sizes"][1] else 2000
-                    ),
-                    seed=config["seed"] + i,
-                )
-                for i in range(1, 5)
-            ],
+        test_dataset = YinYangDataset(
+            size=(config["subset_sizes"][1] if config["subset_sizes"][1] else 2000),
+            # seed=config["seed"] + 1,
+            seed=43,
         )
 
+        if config["pre_encoded"]:
+            train_dataset.data, train_dataset.targets, _ = encode_data(
+                train_dataset, config
+            )
+            test_dataset.data, test_dataset.targets, _ = encode_data(
+                test_dataset, config
+            )
     else:
         raise ValueError("Invalid dataset name")
 
@@ -156,18 +161,26 @@ def main(args, use_wandb=False, **override_params):
                     p.requires_grad = False
 
     # ------ Training ------
-    optimizers_type = {"adam": torch.optim.Adam, "sgd": torch.optim.SGD}
+    optimizers_types = {
+        "Adam": torch.optim.Adam,
+        "SGD": torch.optim.SGD,
+        "AdamW": torch.optim.AdamW,
+        "Nadam": torch.optim.NAdam,
+        "Radam": torch.optim.RAdam,
+    }
+    opt_type = optimizers_types[config["optimizer"]]
+    opt_accepted_args = inspect.getfullargspec(opt_type).args
+    opt_args = {k: v for k, v in config.items() if k in opt_accepted_args}
+    if "betas" in opt_accepted_args:
+        opt_args["betas"] = (config["adam_beta_1"], config["adam_beta_2"])
+
     try:
-        optimizer = optimizers_type[config["optimizer"]](
+        optimizer = opt_type(
             model.parameters(),
-            lr=config["lr"],
-            weight_decay=config["weight_decay"],
-            betas=(config["adam_beta_1"], config["adam_beta_2"]),
+            **opt_args,
         )
     except ValueError:
-        optimizer = optimizers_type[config["optimizer"]](
-            model.parameters(), config["lr"]
-        )
+        optimizer = opt_type(model.parameters(), config["lr"])
 
     if config.get("gamma", None) is not None:
         scheduler = torch.optim.lr_scheduler.StepLR(
@@ -213,7 +226,7 @@ def main(args, use_wandb=False, **override_params):
 
 if __name__ == "__main__":
 
-    use_wandb = False
+    use_wandb = True
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
     sweep_id = "s5hcchgl"
@@ -223,8 +236,8 @@ if __name__ == "__main__":
     use_run_params = False
 
     data_config = {
-        "seed": np.random.randint(10000),
-        # "seed": 4424,
+        # "seed": np.random.randint(10000),
+        "seed": 42,
         "dataset": "ying_yang",
         "subset_sizes": [5000, 1000],
         "deterministic": True,
@@ -236,6 +249,8 @@ if __name__ == "__main__":
         "t_max": None,
         "data_folder": f"{file_dir}/../../data",
         "input_dropout": 0.0,
+        "exclude_ambiguous": True,
+        "pre_encoded": True,
     }
 
     paper_params = {
@@ -262,8 +277,8 @@ if __name__ == "__main__":
             "tau_s": 5e-3,
         },
         "weights": {
-            # "init_mode": "kaiming_both",
-            "init_mode": "paper",
+            "init_mode": "kaiming_both",
+            # "init_mode": "paper",
             # Used in case of "kaiming_both" init_mode
             "scales": {
                 0: {
@@ -290,28 +305,30 @@ if __name__ == "__main__":
     )
 
     training_config = {
-        "n_epochs": 60,
-        "n_tests": 15,
+        "n_epochs": 40,
+        "n_tests": 10,
         "exclude_equal": False,
     }
 
     optim_config = {
-        "optimizer": "adam",
+        # "optimizer": "Adam",
+        "optimizer": "SGD",
         # "lr": 0.0019,
-        "lr": 5e-2,
-        # "weight_decay": 0.00000065,
-        "weight_decay": 0.0,
+        "lr": 1,
+        "weight_decay": 6.5e-7,
+        # "weight_decay": 0.0,
         "gamma": 0.95,  # decay per epoch
         "adam_beta_1": 0.9,
         "adam_beta_2": 0.999,
+        "momentum": 0.9,
     }
 
     loss_config = {
         # "loss": "quadratic",
         "loss": "ce_temporal",
-        "alpha": 0.0096,
-        "xi": 1.43,
-        "beta": 96,
+        "alpha": 1e-2,
+        "xi": 1.5,
+        "beta": 100,
     }
 
     config = {
@@ -395,6 +412,7 @@ if __name__ == "__main__":
                 "results_table": table,
                 "mean_test_acc": np.mean(all_test_accs[:, -1]),
                 "max_test_acc": np.mean(np.max(all_test_accs, axis=1)),
+                "mean_max_test_acc": np.max(np.mean(all_test_accs, axis=0)),
                 "max_last3_test_acc": np.mean(np.max(all_test_accs[:, -3:], axis=1)),
                 "std_last_test_acc": np.std(all_test_accs[:, -1]),
                 "last_test_loss": np.mean(all_test_losses[:, -1]),
