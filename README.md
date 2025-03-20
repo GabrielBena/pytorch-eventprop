@@ -42,3 +42,26 @@ The default hyperparameters result in stable training, reaching around 85% train
 ## Extensions
 
 If there is enough interest, I can try to extend the EventProp implementation to handle hidden layers / convolutions. If you'd like to extend it yourself, feel free to submit a pull request.
+
+## Installation
+
+This package is now called `pytorch_eventprop` (previously it was just `eventprop`). You can install it with:
+
+```bash
+cd pytorch-eventprop
+pip install -e .
+```
+
+After installation, you can import it using:
+
+```python
+import pytorch_eventprop
+from pytorch_eventprop.models import SNN, SpikeCELoss
+```
+
+For backward compatibility, the `eventprop` package is still available:
+
+```python
+import eventprop
+from eventprop.models import SNN, SpikeCELoss
+```
