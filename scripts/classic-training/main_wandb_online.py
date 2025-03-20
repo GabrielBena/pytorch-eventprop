@@ -61,17 +61,27 @@ def main(args, use_wandb=False, **override_params):
             wandb.log({"seed": config["seed"]})
 
     if config["dataset"] == "mnist":
+
+        mnist_transforms = transforms.Compose(
+            [
+                transforms.Resize((14, 14)),
+                transforms.ToTensor(),
+                # transforms.Normalize((0.1307,), (0.3081,)),
+                lambda x: (x - x.min()) / (x.max() - x.min()),
+            ]
+        )
+
         train_dataset = datasets.MNIST(
             config["data_folder"],
             train=True,
             download=True,
-            transform=transforms.ToTensor(),
+            transform=mnist_transforms,
         )
         test_dataset = datasets.MNIST(
             config["data_folder"],
             train=False,
             download=True,
-            transform=transforms.ToTensor(),
+            transform=mnist_transforms,
         )
 
         if config.get("subset_sizes", None) is not None:
@@ -112,15 +122,25 @@ def main(args, use_wandb=False, **override_params):
             seed=43,
         )
 
-        if config["pre_encoded"]:
+    else:
+        raise ValueError("Invalid dataset name")
+
+    if config["pre_encoded"]:
+        if isinstance(train_dataset, torch.utils.data.Subset):
+            train_dataset.dataset.data, train_dataset.dataset.targets, _ = encode_data(
+                train_dataset, config
+            )
+            test_dataset.dataset.data, test_dataset.dataset.targets, _ = encode_data(
+                test_dataset, config
+            )
+        else:
+
             train_dataset.data, train_dataset.targets, _ = encode_data(
                 train_dataset, config
             )
             test_dataset.data, test_dataset.targets, _ = encode_data(
                 test_dataset, config
             )
-    else:
-        raise ValueError("Invalid dataset name")
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True
@@ -136,7 +156,7 @@ def main(args, use_wandb=False, **override_params):
 
     # ------ Model ------
 
-    n_ins = {"mnist": 784, "ying_yang": 5 if config["encoding"] == "latency" else 4}
+    n_ins = {"mnist": 14 * 14, "ying_yang": 5 if config["encoding"] == "latency" else 4}
     n_outs = {"mnist": 10, "ying_yang": 3}
 
     # config.update(
@@ -230,11 +250,11 @@ def main(args, use_wandb=False, **override_params):
 
 if __name__ == "__main__":
 
-    use_wandb = True
+    use_wandb = False
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
     sweep_id = "udglm207"
-    use_best_params = True
+    use_best_params = False
     best_params_to_use = {"optim", "model"}
     # best_params_to_use = None
     use_run_params = False
@@ -242,8 +262,8 @@ if __name__ == "__main__":
     data_config = {
         # "seed": np.random.randint(10000),
         "seed": 42,
-        "dataset": "ying_yang",
-        "subset_sizes": [300, 2000],
+        "dataset": "mnist",
+        "subset_sizes": [1000, 10000],
         "deterministic": True,
         "batch_size": 1,
         "encoding": "latency",
@@ -253,8 +273,8 @@ if __name__ == "__main__":
         "t_max": None,
         "data_folder": f"{file_dir}/../../data",
         "input_dropout": 0.0,
-        "exclude_ambiguous": True,
-        "pre_encoded": True,
+        "exclude_ambiguous": False,
+        "pre_encoded": False,
     }
 
     paper_params = {
@@ -286,18 +306,18 @@ if __name__ == "__main__":
             # Used in case of "kaiming_both" init_mode
             "scales": {
                 0: {
-                    "scale_0_mu": 3.2,
-                    "scale_0_sigma": 3.2,
+                    "scale_0_mu": 3.2 * 2,
+                    "scale_0_sigma": 3.2 * 2,
                 },
                 1: {
                     # "scale_1_mu": 5.2,
-                    "scale_1_mu": 3.5,
+                    "scale_1_mu": 3.5 * 2,
                     # "scale_1_sigma": 2.8,
-                    "scale_1_sigma": 2.3,
+                    "scale_1_sigma": 2.3 * 2,
                 },
             },
             # Used in case of "paper" init_mode
-            "n_hid": 120,
+            "n_hid": 20,
             "resolve_silent": False,
             "dropout": 0.0,
         },
@@ -326,7 +346,7 @@ if __name__ == "__main__":
         "weight_decay": 1.5e-7,
         # "weight_decay": 0.0,
         # "gamma": 0.95,  # decay per epoch
-        "gamma": 0.41,
+        "gamma": 0.41 * 0.7,
         "adam_beta_1": 0.9,
         "adam_beta_2": 0.999,
         "momentum": 0.9,
@@ -378,7 +398,7 @@ if __name__ == "__main__":
     if "device" in best_params:
         best_params.pop("device")
 
-    for test in range(training_config["n_tests"]):
+    for i, test in enumerate(range(training_config["n_tests"])):
         train_results = main(
             flat_config,
             use_wandb=use_wandb,
@@ -386,7 +406,7 @@ if __name__ == "__main__":
             **best_params,
         )
         all_train_results.append(train_results)
-        all_seeds.append(flat_config["seed"] + test)
+        all_seeds.append(flat_config["seed"] + i)
 
     try:
 

@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from torch.utils.data.dataset import Dataset
+from torch.utils.data.dataset import Dataset, Subset
 
 from snntorch.spikegen import rate, latency
 import argparse
@@ -10,7 +10,10 @@ import ast
 
 def encode_data(dataset, args, labels=None):
 
-    if isinstance(dataset, Dataset):
+    if isinstance(dataset, Subset):
+        data = dataset.dataset.data
+        labels = dataset.dataset.targets
+    elif isinstance(dataset, Dataset):
         data = dataset.data
         labels = dataset.targets
     else:
@@ -111,4 +114,3 @@ def balance_dataset(data, labels):
     n_classes = len(np.unique(labels))
     n_samples = len(labels)
     n_samples_per_class = n_samples
-    

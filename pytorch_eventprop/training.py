@@ -85,7 +85,9 @@ def train(
     for batch_idx, (data, target) in enumerate(pbar_f):
         data, target = data.to(args.device), target.to(args.device)
         spike_data = (
-            encode_data(data, args) if not args.pre_encoded else data.transpose(0, 1)
+            encode_data(data, args)[0].transpose(0, 1)
+            if not args.pre_encoded
+            else data.transpose(0, 1)
         )
 
         output, out_dict = model(spike_data)
@@ -162,7 +164,7 @@ def test(model, criterion, loader, args, first_spike_fn=None, pbar=None):
         for batch_idx, (data, target) in enumerate(loader):
             data, target = data.to(args.device), target.to(args.device)
             spike_data = (
-                encode_data(data, args)
+                encode_data(data, args)[0].transpose(0, 1)
                 if not args.pre_encoded
                 else data.transpose(0, 1)
             )
