@@ -1,26 +1,26 @@
-import numpy as np
-import wandb
+import argparse
+import inspect
+import os
 import random
+
+import numpy as np
 import torch
 import torch.nn.functional as F
-import argparse
-import os
-import inspect
-
+from pytorch_eventprop.config import get_flat_dict_from_nested
+from pytorch_eventprop.data import encode_data
+from pytorch_eventprop.models import SNN, FirstSpikeTime, SpikeCELoss, SpikeQuadLoss
+from pytorch_eventprop.training import train_single_model
 from snntorch.functional.loss import (
-    ce_temporal_loss,
     SpikeTime,
-    ce_rate_loss,
     ce_count_loss,
+    ce_rate_loss,
+    ce_temporal_loss,
 )
-
 from torch.utils.data.dataset import ConcatDataset
 from torchvision import datasets, transforms
 from yingyang.dataset import YinYangDataset
-from eventprop.models import SNN, SpikeCELoss, FirstSpikeTime, SpikeQuadLoss
-from eventprop.training import train_single_model
-from eventprop.config import get_flat_dict_from_nested
-from eventprop.data import encode_data
+
+import wandb
 
 
 def main(args, use_wandb=False, **override_params):
@@ -29,9 +29,7 @@ def main(args, use_wandb=False, **override_params):
     elif isinstance(args, dict):
         config = args
     else:
-        raise ValueError(
-            "Invalid type for run configuration, must be dict or Namespace"
-        )
+        raise ValueError("Invalid type for run configuration, must be dict or Namespace")
 
     config["device"] = config.get(
         "device", torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -61,7 +59,6 @@ def main(args, use_wandb=False, **override_params):
             wandb.log({"seed": config["seed"]})
 
     if config["dataset"] == "mnist":
-
         mnist_transforms = transforms.Compose(
             [
                 transforms.Resize((14, 14)),
@@ -110,7 +107,6 @@ def main(args, use_wandb=False, **override_params):
                 test_dataset = torch.utils.data.Subset(test_dataset, indices=indices)
 
     elif config["dataset"] == "ying_yang":
-
         train_dataset = YinYangDataset(
             size=config["subset_sizes"][0] if config["subset_sizes"][0] else 5000,
             # seed=config["seed"],
@@ -134,22 +130,15 @@ def main(args, use_wandb=False, **override_params):
                 test_dataset, config
             )
         else:
-
-            train_dataset.data, train_dataset.targets, _ = encode_data(
-                train_dataset, config
-            )
-            test_dataset.data, test_dataset.targets, _ = encode_data(
-                test_dataset, config
-            )
+            train_dataset.data, train_dataset.targets, _ = encode_data(train_dataset, config)
+            test_dataset.data, test_dataset.targets, _ = encode_data(test_dataset, config)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True
     )
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size=(
-            min(256, config["subset_sizes"][1]) if config["subset_sizes"][1] else 256
-        ),
+        batch_size=(min(256, config["subset_sizes"][1]) if config["subset_sizes"][1] else 256),
         shuffle=False,
         drop_last=True,
     )
@@ -249,7 +238,6 @@ def main(args, use_wandb=False, **override_params):
 
 
 if __name__ == "__main__":
-
     use_wandb = False
     file_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -262,12 +250,12 @@ if __name__ == "__main__":
     data_config = {
         # "seed": np.random.randint(10000),
         "seed": 42,
-        "dataset": "mnist",
-        "subset_sizes": [1000, 10000],
+        "dataset": "ying_yang",
+        "subset_sizes": [300, 10000],
         "deterministic": True,
         "batch_size": 1,
         "encoding": "latency",
-        "T": 27,
+        "T": 28,
         "dt": 1e-3,
         "t_min": 2,
         "t_max": None,
@@ -306,14 +294,14 @@ if __name__ == "__main__":
             # Used in case of "kaiming_both" init_mode
             "scales": {
                 0: {
-                    "scale_0_mu": 3.2 * 2,
-                    "scale_0_sigma": 3.2 * 2,
+                    "scale_0_mu": 3.2,
+                    "scale_0_sigma": 3.2,
                 },
                 1: {
                     # "scale_1_mu": 5.2,
-                    "scale_1_mu": 3.5 * 2,
+                    "scale_1_mu": 3.5,
                     # "scale_1_sigma": 2.8,
-                    "scale_1_sigma": 2.3 * 2,
+                    "scale_1_sigma": 2.3,
                 },
             },
             # Used in case of "paper" init_mode
@@ -331,8 +319,8 @@ if __name__ == "__main__":
     )
 
     training_config = {
-        "n_epochs": 2,
-        "n_tests": 20,
+        "n_epochs": 5,
+        "n_tests": 5,
         "exclude_equal": False,
     }
 
@@ -346,7 +334,7 @@ if __name__ == "__main__":
         "weight_decay": 1.5e-7,
         # "weight_decay": 0.0,
         # "gamma": 0.95,  # decay per epoch
-        "gamma": 0.41 * 0.7,
+        "gamma": 0.41,
         "adam_beta_1": 0.9,
         "adam_beta_2": 0.999,
         "momentum": 0.9,
@@ -388,9 +376,7 @@ if __name__ == "__main__":
     if use_best_params and best_params_to_use is not None:
         best_params = {
             k: best_params[k]
-            for k in get_flat_dict_from_nested(
-                {k: config[k] for k in best_params_to_use}
-            )
+            for k in get_flat_dict_from_nested({k: config[k] for k in best_params_to_use})
         }
 
     if "seed" in best_params:
@@ -409,10 +395,7 @@ if __name__ == "__main__":
         all_seeds.append(flat_config["seed"] + i)
 
     try:
-
-        all_test_accs = np.array(
-            [train_results["test_acc"] for train_results in all_train_results]
-        )
+        all_test_accs = np.array([train_results["test_acc"] for train_results in all_train_results])
         all_test_losses = np.array(
             [train_results["test_loss"] for train_results in all_train_results]
         )
@@ -429,9 +412,7 @@ if __name__ == "__main__":
 
     data = [
         [test_accs, test_losses, seed]
-        for test_accs, test_losses, seed in zip(
-            all_test_accs, all_test_losses, all_seeds
-        )
+        for test_accs, test_losses, seed in zip(all_test_accs, all_test_losses, all_seeds)
     ]
     table = wandb.Table(data=data, columns=["test_acc", "test_loss", "seed"])
 

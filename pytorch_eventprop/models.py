@@ -1,12 +1,12 @@
-import torch
-import torch.nn as nn
-import torch.nn.init as init
-import torch.nn.functional as F
-from torch.autograd import Function
+from typing import Any, Tuple
+
 import numpy as np
 import snntorch as snn
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from snntorch.functional.loss import SpikeTime
-from collections import OrderedDict
+from torch.autograd import Function
 
 try:
     from torchmeta.modules import MetaModule
@@ -136,9 +136,7 @@ class SpikingLinear_ev(MetaModule):
     def forward(self, input, params=None):
         if params is not None:
             # print("Layer Using params")
-            return self.EventProp.apply(
-                input, params, self.manual_forward, self.manual_backward
-            )
+            return self.EventProp.apply(input, params, self.manual_forward, self.manual_backward)
         else:
             return self.EventProp.apply(
                 input, self.weight, self.manual_forward, self.manual_backward
@@ -146,17 +144,13 @@ class SpikingLinear_ev(MetaModule):
 
     @staticmethod
     class EventProp(Function):
-
         @staticmethod
         def forward(input, weights, manual_forward, manual_backward):
             output, pack, fwd_dict = manual_forward(input, weights)
             return output, fwd_dict, pack
 
         @staticmethod
-        def setup_context(
-            ctx: torch.Any, inputs: torch.Tuple[torch.Any], outputs: torch.Any
-        ) -> torch.Any:
-
+        def setup_context(ctx: Any, inputs: Tuple[Any], outputs: Any) -> Any:
             input, weights, manual_forward, manual_backward = inputs
             *_, pack = outputs
 
@@ -166,7 +160,6 @@ class SpikingLinear_ev(MetaModule):
 
         @staticmethod
         def backward(ctx, *grad_output):
-
             backward = ctx.backward
             pack = ctx.saved_tensors
             weights = ctx.weights
@@ -184,7 +177,6 @@ class SpikingLinear_ev(MetaModule):
         return super().__repr__()[:-1] + f"{self.input_dim}, {self.output_dim})"
 
     def manual_forward(self, input, weights=None):
-
         steps = input.shape[0]
         assert self.T == steps, f"Input steps {steps} != T {self.T}"
 
@@ -223,7 +215,6 @@ class SpikingLinear_ev(MetaModule):
                 output[i] = spikes
             is_silent = output.sum(0).mean(0) == 0
             if self.training and self.resolve_silent:
-
                 self.weight.data[is_silent] += self.mu_silent
                 if is_silent.sum() == 0:
                     break
@@ -257,11 +248,8 @@ class SpikingLinear_ev(MetaModule):
         jumps, V_dots = [], []
 
         for i in range(steps - 2, -1, -1):
-
             delta = lV[i + 1] - lI[i + 1]
-            grad_input[i] = F.linear(
-                delta, self.weight.t() if weights is None else weights.t()
-            )
+            grad_input[i] = F.linear(delta, self.weight.t() if weights is None else weights.t())
 
             # Euler
             lI[i] = self.alpha * lI[i + 1] + (1 - self.alpha) * lV[i + 1]
@@ -395,8 +383,7 @@ class SpikingLinear_su(nn.Module):
 
 layer_types = {str(l): l for l in [SpikingLinear_ev, SpikingLinear_su]}
 model_types = {
-    m: l
-    for m, l in zip(["eventprop", "snntorch"], [SpikingLinear_ev, SpikingLinear_su])
+    m: l for m, l in zip(["eventprop", "snntorch"], [SpikingLinear_ev, SpikingLinear_su])
 }
 
 
@@ -419,9 +406,7 @@ class SpikeCELoss(nn.Module):
         if self.alpha != 0:
             target_first_spike_times = first_spikes.gather(1, target.view(-1, 1))
             reg_loss = (
-                loss
-                + self.alpha
-                * (torch.exp(target_first_spike_times / (self.beta)) - 1).mean()
+                loss + self.alpha * (torch.exp(target_first_spike_times / (self.beta)) - 1).mean()
             )
         else:
             reg_loss = loss
@@ -460,9 +445,7 @@ class SpikeQuadLoss(nn.Module):
         if self.alpha != 0:
             target_first_spike_times = first_spikes.gather(1, target.view(-1, 1))
             reg_loss = (
-                loss
-                + self.alpha
-                * (torch.exp(target_first_spike_times / (self.beta)) - 1).mean()
+                loss + self.alpha * (torch.exp(target_first_spike_times / (self.beta)) - 1).mean()
             )
         else:
             reg_loss = loss
@@ -474,32 +457,22 @@ class FirstSpikeTime(Function):
     @staticmethod
     def forward(input):
         idx = (
-            torch.arange(input.shape[0], 0, -1)
-            .unsqueeze(-1)
-            .unsqueeze(-1)
-            .float()
-            .to(input.device)
+            torch.arange(input.shape[0], 0, -1).unsqueeze(-1).unsqueeze(-1).float().to(input.device)
         )
         first_spike_times = torch.argmax(idx * input, dim=0).float()
-        assert not (
-            first_spike_times == input.shape[0]
-        ).any(), "Last ts is not a spike time"
+        assert not (first_spike_times == input.shape[0]).any(), "Last ts is not a spike time"
         first_spike_times[first_spike_times == 0] = input.shape[0]
         return first_spike_times
 
     @staticmethod
-    def setup_context(
-        ctx: torch.Any, inputs: torch.Tuple[torch.Any], output: torch.Any
-    ) -> torch.Any:
+    def setup_context(ctx: Any, inputs: Tuple[Any], output: Any) -> Any:
         ctx.save_for_backward(*inputs, output.clone())
 
     @staticmethod
     def backward(ctx, grad_output):
         input, first_spike_times = ctx.saved_tensors
         k = (
-            F.one_hot(
-                first_spike_times.long().clip_(0, input.shape[0] - 1), input.shape[0]
-            )
+            F.one_hot(first_spike_times.long().clip_(0, input.shape[0] - 1), input.shape[0])
             .float()
             .permute(2, 0, 1)
         )  # T x B x N
@@ -520,20 +493,16 @@ class SNN(nn.Module):
 
         self.free_recordings = all_kwargs.get("free_recordings", True)
 
-        assert not (
-            self.layer_type is None and self.model_type is None
-        ), "Must specify layer_type or model_type"
+        assert not (self.layer_type is None and self.model_type is None), (
+            "Must specify layer_type or model_type"
+        )
 
         if self.model_type is not None:
-            assert (
-                self.model_type in model_types
-            ), f"Invalid model_type {self.model_type}"
+            assert self.model_type in model_types, f"Invalid model_type {self.model_type}"
             layer = model_types[self.model_type]
             self.eventprop = self.model_type == "eventprop"
         else:
-            assert (
-                self.layer_type in layer_types
-            ), f"Invalid layer_type {self.layer_type}"
+            assert self.layer_type in layer_types, f"Invalid layer_type {self.layer_type}"
             layer = layer_types[self.layer_type]
             self.eventprop = self.layer_type == str(SpikingLinear_ev)
 
@@ -556,8 +525,7 @@ class SNN(nn.Module):
 
         for i, (d1, d2) in enumerate(zip(dims[:-1], dims[1:])):
             layer_kwargs = {
-                k: v[i] if isinstance(v, (list, np.ndarray)) else v
-                for k, v in all_kwargs.items()
+                k: v[i] if isinstance(v, (list, np.ndarray)) else v for k, v in all_kwargs.items()
             }
 
             # print(
@@ -581,7 +549,6 @@ class SNN(nn.Module):
         return super().to(device)
 
     def forward(self, input, params=None, reset_recordings=True):
-
         # print(f"Resetting recordings : {reset_recordings}")
         if reset_recordings:
             self.reset_recordings()
@@ -605,9 +572,7 @@ class SNN(nn.Module):
 
     def meta_named_parameters(self, prefix="", recurse=True):
         gen = self._named_members(
-            lambda module: (
-                module._parameters.items() if isinstance(module, MetaModule) else []
-            ),
+            lambda module: (module._parameters.items() if isinstance(module, MetaModule) else []),
             prefix=prefix,
             recurse=recurse,
         )
