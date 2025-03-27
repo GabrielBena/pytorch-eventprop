@@ -131,6 +131,8 @@ class SpikingLinear_ev(MetaModule):
         #     input, self.weight, self.manual_forward, self.manual_backward
         # )
 
+        # Only store a limited number of backward dictionaries to prevent memory growth
+        self.max_bwd_dicts = kwargs.get("max_bwd_dicts", 1)
         self.bwd_dicts = []
 
     def forward(self, input, params=None):
@@ -164,13 +166,17 @@ class SpikingLinear_ev(MetaModule):
             pack = ctx.saved_tensors
             weights = ctx.weights
 
+            # Call the manual backward function which adds to bwd_dicts internally
             grad_input, grad_weights, lV, lI = backward(grad_output[0], pack, weights)
+
+            # Create backward dictionary to return (though not used directly)
             bwd_dict = {
                 "grad_input": grad_input,
                 "grad_weights": grad_weights,
                 "lV": lV,
                 "lI": lI,
             }
+
             return grad_input, grad_weights, None, None
 
     def __repr__(self):
@@ -305,9 +311,32 @@ class SpikingLinear_ev(MetaModule):
             "grad_input": grad_input,
             "grad_weight": grad_weight,
         }
+
+        # Store the backward dictionary with a limit on number kept
+        if len(self.bwd_dicts) >= self.max_bwd_dicts:
+            # Remove oldest item if we've reached the limit
+            self.bwd_dicts.pop(0)
+
         self.bwd_dicts.append(output_dict)
 
         return grad_input.data, grad_weight.data, lV, lI
+
+    def get_latest_bwd_dict(self):
+        """
+        Get the most recent backward dictionary.
+
+        Returns:
+            Dict or None: The most recent backward dictionary or None if none exists.
+        """
+        if self.bwd_dicts:
+            return self.bwd_dicts[-1]
+        return None
+
+    def clear_bwd_dicts(self):
+        """
+        Clear all stored backward dictionaries.
+        """
+        self.bwd_dicts = []
 
 
 class SpikingLinear_su(nn.Module):
@@ -528,10 +557,6 @@ class SNN(nn.Module):
                 k: v[i] if isinstance(v, (list, np.ndarray)) else v for k, v in all_kwargs.items()
             }
 
-            # print(
-            #     f"Creating layer with params {dict({k: v[i] for k, v in all_kwargs.items() if isinstance(v, (list, np.ndarray))})}"
-            # )
-
             if i != 0:
                 layer_kwargs["dropout"] = None
 
@@ -542,6 +567,12 @@ class SNN(nn.Module):
 
         self.layers = RecordingSequential(*layers)
 
+        # Only store the most recent backward dictionaries temporarily
+        self._last_bwd_dicts = None
+
+        # Debug flag to help with backward dictionary tracking
+        self.debug = all_kwargs.get("debug", False)
+
     def to(self, device):
         self.device = device
         for l in self.layers:
@@ -549,26 +580,104 @@ class SNN(nn.Module):
         return super().to(device)
 
     def forward(self, input, params=None, reset_recordings=True):
-        # print(f"Resetting recordings : {reset_recordings}")
+        """
+        Forward pass through the SNN model.
+
+        Args:
+            input: Input tensor
+            params: Optional parameters for meta-learning
+            reset_recordings: Whether to reset recordings before forward pass
+
+        Returns:
+            Tuple of (output, layer_recordings)
+        """
         if reset_recordings:
             self.reset_recordings()
+
         if not self.eventprop:
             input = input.float()
             reset(self)
 
         if len(input.shape) > 3:
             input = input.transpose(0, 1).squeeze()
-        # out, all_recs = self.layers(input)
+
+        # Process forward pass
         out_dict = self.layers(input, params=params)
         out = out_dict["output"]
+
+        # Explicitly gather backward dictionaries after forward pass
+        # This is important for visualization later
+        bwd_dicts = self.get_backward_dicts()
+
+        # Debug prints to help diagnose backward dictionary issues
+        if self.debug and len(bwd_dicts) > 0:
+            print(f"Forward pass captured {len(bwd_dicts)} layer backward dictionaries")
+            for layer_idx, layer_dicts in bwd_dicts.items():
+                if isinstance(layer_dicts, list):
+                    print(f"  Layer {layer_idx}: {len(layer_dicts)} backward dictionaries")
+                else:
+                    print(f"  Layer {layer_idx}: 1 backward dictionary")
+
+        # Store for later retrieval (this will be moved to SNN after forward)
+        self._last_bwd_dicts = bwd_dicts
+
         if self.get_first_spikes:
             out = self.outact(out)
+
         return out, out_dict["recordings"]
 
     def reset_recordings(self):
-        # print("Resetting recordings")
-        for l in self.layers:
-            l.bwd_dicts = []
+        """Reset backward dictionaries without accumulating them in memory."""
+        # Reset backward dictionaries in each layer without storing them
+        for layer in self.layers:
+            if hasattr(layer, "bwd_dicts"):
+                layer.bwd_dicts = []
+
+        # Clear any stored backward dictionaries
+        self._last_bwd_dicts = None
+
+    def get_backward_dicts(self):
+        """
+        Get backward dictionaries from all layers.
+
+        Returns:
+            Dict: Dictionary of backward dictionaries organized by layer index.
+        """
+        bwd_dicts = {}
+        for i, layer in enumerate(self.layers):
+            if hasattr(layer, "bwd_dicts") and layer.bwd_dicts:
+                bwd_dicts[i] = layer.bwd_dicts
+        return bwd_dicts
+
+    def get_layer_backward_dicts(self, layer_idx):
+        """
+        Get backward dictionaries for a specific layer.
+
+        Args:
+            layer_idx: Index of the layer to get backward dictionaries for.
+
+        Returns:
+            List: List of backward dictionaries for the specified layer.
+        """
+        if 0 <= layer_idx < len(self.layers):
+            layer = self.layers[layer_idx]
+            if hasattr(layer, "bwd_dicts"):
+                return layer.bwd_dicts
+        return []
+
+    def get_last_backward_dicts(self):
+        """
+        Get the backward dictionaries from the last forward pass.
+
+        Returns:
+            Dict: Dictionary of backward dictionaries from the last forward pass.
+        """
+        # First try to get from stored attribute
+        if self._last_bwd_dicts is not None:
+            return self._last_bwd_dicts
+
+        # If not available, try to collect from layers
+        return self.get_backward_dicts()
 
     def meta_named_parameters(self, prefix="", recurse=True):
         gen = self._named_members(
